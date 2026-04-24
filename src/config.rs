@@ -74,6 +74,7 @@ impl Config {
     ///
     /// # Returns
     /// An [`EmbdEntry`] if one exists at the given identifier. None otherwise.
+    #[allow(dead_code)]
     pub fn get(&self, name: &str) -> Option<&EmbdEntry> {
         self.0.get(name)
     }
