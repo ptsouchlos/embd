@@ -20,6 +20,8 @@ pub(crate) struct AddArgs {
         help = "Turn on to allow untracked files in target folder"
     )]
     allow_untracked: bool,
+    #[clap(short, long, help = "Commit hash or tag to pull")]
+    git_tag: Option<String>,
 }
 
 pub(crate) fn execute(args: AddArgs) -> Result<()> {
@@ -51,15 +53,21 @@ pub(crate) fn execute(args: AddArgs) -> Result<()> {
     }
 
     let tmp = tempdir().context("failed to create temporary directory")?;
-    git::cli::clone(&args.link, tmp.path())?;
+    let git_tag_valid = args.git_tag.is_some();
+    git::cli::clone(&args.link, tmp.path(), !git_tag_valid)?;
+    if git_tag_valid {
+        git::cli::checkout(tmp.path(), args.git_tag.unwrap())?;
+    }
+
     let commit_hash = git::cli::commit_hash_of(tmp.path())?;
+
     filesystem::copy_dir(tmp.path(), &args.folder)?;
 
     // Get the name from the repo link
     let url = Url::from_str(&args.link)?;
-    let segments = url.path_segments().context("Could not split URL")?;
+    let mut segments = url.path_segments().context("Could not split URL")?;
     let repo_name = segments
-        .last()
+        .next_back()
         .context("Could not get repo name from {args.link}")?
         .replace(".git", "");
 
