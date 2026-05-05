@@ -6,14 +6,32 @@ pub(crate) mod cli {
 
     use anyhow::{Context, Result, bail};
 
-    pub(crate) fn clone(link: &str, dest: &Path) -> Result<()> {
-        let out = std::process::Command::new("git")
-            .args(["clone", "--depth", "1", link, &dest.to_string_lossy()])
-            .output()
-            .context("failed to run git clone")?;
+    pub(crate) fn clone(link: &str, dest: &Path, shallow: bool) -> Result<()> {
+        let mut cmd = std::process::Command::new("git");
+        cmd.args(["clone", link, &dest.to_string_lossy()]);
+        if shallow {
+            cmd.args(["--depth", "1"]);
+        }
+
+        let out = cmd.output().context("failed to run git clone")?;
         if !out.status.success() {
             bail!(
                 "git clone failed:\n{}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        }
+        Ok(())
+    }
+
+    pub(crate) fn checkout(repo_dir: &Path, git_tag: String) -> Result<()> {
+        let out = std::process::Command::new("git")
+            .current_dir(repo_dir)
+            .args(["checkout", git_tag.as_str()])
+            .output()
+            .context("git checkout failed")?;
+        if !out.status.success() {
+            bail!(
+                "git checkout failed:\n{}",
                 String::from_utf8_lossy(&out.stderr)
             );
         }
