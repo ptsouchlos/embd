@@ -1,6 +1,75 @@
 //! This module abstracts the git functionality needed to make `embd` work so that
 //! the tool can continue to work whether a global git executable is available or not.
 
+use anyhow::{Context, Result, bail};
+use url::Url;
+
+/// Parse a repository link and extract a name for it.
+///
+/// Accepts both standard URLs (`https://github.com/org/repo.git`) and
+/// SSH refs (`git@github.com:org/repo.git`). Returns the trimmed link and the
+/// repo name (last path segment with any trailing `.git` removed).
+///
+/// # Arguments
+///
+/// - `link`: The link to parse the name from.
+///
+/// # Returns
+///
+/// The trimmed, original link and the repo name.
+pub(crate) fn parse_repo_link(link: &str) -> Result<(String, String)> {
+    let trimmed = link.trim();
+    if trimmed.is_empty() {
+        bail!("repository link is empty");
+    }
+
+    let path = if let Some(scp_path) = parse_ssh_style_path(trimmed) {
+        scp_path.to_string()
+    } else {
+        let url =
+            Url::parse(trimmed).with_context(|| format!("invalid repository link: {trimmed}"))?;
+        url.path().to_string()
+    };
+
+    let last = path
+        .trim_end_matches('/')
+        .rsplit('/')
+        .find(|s| !s.is_empty())
+        .with_context(|| format!("could not extract repo name from {trimmed}"))?;
+    let name = last.strip_suffix(".git").unwrap_or(last);
+    if name.is_empty() {
+        bail!("could not extract repo name from {trimmed}");
+    }
+
+    Ok((trimmed.to_string(), name.to_string()))
+}
+
+/// Recognize scp-style SSH refs like `git@host:org/repo.git` and return the
+/// path portion after the colon. Returns None for anything that looks like a
+/// URL (contains `://`) or doesn't match the pattern.
+///
+/// # Arguments
+///
+/// - `link`: The link to parse.
+///
+/// # Returns
+///
+/// Optional string of the repo name as parsed from the link.
+fn parse_ssh_style_path(link: &str) -> Option<&str> {
+    if link.contains("://") {
+        return None;
+    }
+    let (before, after) = link.split_once(':')?;
+    if before.is_empty() || after.is_empty() {
+        return None;
+    }
+    // Avoid mistaking a Windows drive path like `C:\foo` for SSH.
+    if before.len() == 1 && before.chars().next()?.is_ascii_alphabetic() {
+        return None;
+    }
+    Some(after)
+}
+
 pub(crate) mod cli {
     use std::path::{Path, PathBuf};
 
@@ -101,5 +170,59 @@ pub(crate) mod cli {
             bail!("not inside a git repository");
         }
         Ok(PathBuf::from(String::from_utf8(out.stdout)?.trim()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_https_url() {
+        let (link, name) = parse_repo_link("https://github.com/org/repo.git").unwrap();
+        assert_eq!(link, "https://github.com/org/repo.git");
+        assert_eq!(name, "repo");
+    }
+
+    #[test]
+    fn parse_https_url_no_dot_git() {
+        let (_, name) = parse_repo_link("https://github.com/org/repo").unwrap();
+        assert_eq!(name, "repo");
+    }
+
+    #[test]
+    fn parse_https_url_trailing_slash() {
+        let (_, name) = parse_repo_link("https://github.com/org/repo/").unwrap();
+        assert_eq!(name, "repo");
+    }
+
+    #[test]
+    fn parse_ssh_scp_style() {
+        let (link, name) = parse_repo_link("git@github.com:org/repo.git").unwrap();
+        assert_eq!(link, "git@github.com:org/repo.git");
+        assert_eq!(name, "repo");
+    }
+
+    #[test]
+    fn parse_ssh_url_style() {
+        let (_, name) = parse_repo_link("ssh://git@github.com/org/repo.git").unwrap();
+        assert_eq!(name, "repo");
+    }
+
+    #[test]
+    fn parse_empty_fails() {
+        assert!(parse_repo_link("").is_err());
+        assert!(parse_repo_link("   ").is_err());
+    }
+
+    #[test]
+    fn parse_no_path_fails() {
+        assert!(parse_repo_link("https://github.com").is_err());
+        assert!(parse_repo_link("https://github.com/").is_err());
+    }
+
+    #[test]
+    fn parse_garbage_fails() {
+        assert!(parse_repo_link("not a url").is_err());
     }
 }
