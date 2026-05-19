@@ -91,6 +91,29 @@ impl Config {
     }
 }
 
+/// Load a [`Config`] from the given path, or return a default one.
+///
+/// # Arguments
+///
+/// - `config_path`: The full path to the config file.
+///
+/// # Returns
+/// The loaded config if the path exists and is a valid [`Config`], otherwise the default [`Config`] is returned.
+pub fn load_or_default(config_path: &Path) -> Result<Config> {
+    match Config::load(config_path) {
+        Ok(c) => Ok(c),
+        Err(e) => {
+            if e.downcast_ref::<std::io::Error>()
+                .is_some_and(|io| io.kind() == std::io::ErrorKind::NotFound)
+            {
+                Ok(Config::default())
+            } else {
+                Err(e)
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
