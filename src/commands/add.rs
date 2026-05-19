@@ -1,11 +1,9 @@
-use std::path::PathBuf;
-use std::str::FromStr;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use tempfile::tempdir;
-use url::Url;
 
-use crate::config::{Config, EmbdEntry};
+use crate::config::{self, EmbdEntry};
 use crate::{filesystem, git, paths};
 
 #[derive(clap::Args, Debug)]
@@ -27,23 +25,28 @@ pub(crate) struct AddArgs {
 pub(crate) fn execute(args: AddArgs) -> Result<()> {
     let root = paths::find_git_root()?;
     let config_path = paths::config_path(&root);
+    let cwd = std::env::current_dir().context("failed to read current directory")?;
 
-    let mut config = match Config::load(&config_path) {
-        Ok(c) => c,
-        Err(e) => {
-            if e.downcast_ref::<std::io::Error>()
-                .is_some_and(|io| io.kind() == std::io::ErrorKind::NotFound)
-            {
-                Config::default()
-            } else {
-                return Err(e);
-            }
-        }
-    };
+    // Validate the link before doing any I/O.
+    let (link, repo_name) = git::parse_repo_link(&args.link)?;
+    let (folder_abs, folder_rel) = paths::resolve_inside_root(&args.folder, &root, &cwd)?;
 
-    if args.folder.is_dir() && !args.allow_untracked {
-        let mut entries = std::fs::read_dir(&args.folder)
-            .with_context(|| format!("failed to read directory {}", args.folder.display()))?;
+    // Load the config, or use a default one
+    let mut config = config::load_or_default(&config_path)?;
+
+    // Check if the config already contains an entry for the given repo.
+    if config.contains(&repo_name) {
+        bail!(
+            "an embed named '{}' already exists in {}",
+            repo_name,
+            config_path.display()
+        );
+    }
+
+    let folder_existed = folder_abs.exists();
+    if folder_existed && !args.allow_untracked {
+        let mut entries = std::fs::read_dir(&folder_abs)
+            .with_context(|| format!("failed to read directory {}", folder_abs.display()))?;
         if entries.next().is_some() {
             bail!(
                 "folder '{}' is non-empty; use --allow-untracked to proceed anyway",
@@ -53,33 +56,59 @@ pub(crate) fn execute(args: AddArgs) -> Result<()> {
     }
 
     let tmp = tempdir().context("failed to create temporary directory")?;
-    let git_tag_valid = args.git_tag.is_some();
-    git::cli::clone(&args.link, tmp.path(), !git_tag_valid)?;
-    if git_tag_valid {
-        git::cli::checkout(tmp.path(), args.git_tag.unwrap())?;
+    let shallow = args.git_tag.is_none();
+    git::cli::clone(&link, tmp.path(), shallow)?;
+    if let Some(ref tag) = args.git_tag {
+        git::cli::checkout(tmp.path(), tag.clone())?;
     }
 
     let commit_hash = git::cli::commit_hash_of(tmp.path())?;
 
-    filesystem::copy_dir(tmp.path(), &args.folder)?;
+    // Copy + register. Anything that fails after copy_dir triggers a rollback
+    // so we never leave on-disk state without a matching config entry.
+    filesystem::copy_dir(tmp.path(), &folder_abs)?;
 
-    // Get the name from the repo link
-    let url = Url::from_str(&args.link)?;
-    let mut segments = url.path_segments().context("Could not split URL")?;
-    let repo_name = segments
-        .next_back()
-        .context("Could not get repo name from {args.link}")?
-        .replace(".git", "");
+    let result = (|| -> Result<()> {
+        config.insert(
+            repo_name.clone(),
+            EmbdEntry {
+                remote: link,
+                commit_hash,
+                folder: folder_rel,
+            },
+        )?;
+        // Save the config
+        config.save(&config_path)?;
+        Ok(())
+    })();
 
-    config.insert(
-        repo_name.to_string(),
-        EmbdEntry {
-            remote: args.link,
-            commit_hash,
-            folder: args.folder,
-        },
-    )?;
-    config.save(&config_path)?;
+    if let Err(e) = result {
+        // If there was an error, try to rollback to the previous state.
+        rollback(&folder_abs, folder_existed, args.allow_untracked);
+        // Propagate the error up to the caller
+        return Err(e);
+    }
 
     Ok(())
+}
+
+/// Best-effort cleanup of a partially-installed embed. If the destination
+/// folder didn't exist before, remove it entirely. If it existed and the user
+/// passed --allow-untracked we don't touch it (we can't tell our files apart
+/// from theirs); otherwise it was empty so we can safely remove it.
+fn rollback(folder: &Path, folder_existed: bool, allow_untracked: bool) {
+    if allow_untracked && folder_existed {
+        eprintln!(
+            "warning: leaving partially-copied files in '{}' (used --allow-untracked)",
+            folder.display()
+        );
+        return;
+    }
+    if let Err(e) = std::fs::remove_dir_all(folder) {
+        eprintln!(
+            "warning: failed to clean up '{}' after error: {}",
+            folder.display(),
+            e
+        );
+    }
 }
