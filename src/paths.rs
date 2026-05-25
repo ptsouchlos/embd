@@ -8,6 +8,7 @@ use crate::git;
 
 const EMBD_FOLDER: &str = ".embd";
 const CONFIG_FILE: &str = "config.toml";
+const CACHE_FOLDER: &str = "cache";
 
 /// Finds the git root of the current directory.
 pub(crate) fn find_git_root() -> Result<PathBuf> {
@@ -38,6 +39,36 @@ pub(crate) fn project_folder(root_path: &Path) -> PathBuf {
 /// [`PathBuf`] to the configuration file.
 pub(crate) fn config_path(root_path: &Path) -> PathBuf {
     project_folder(root_path).join(CONFIG_FILE)
+}
+
+/// Get the path to the cache directory inside the embd project folder.
+pub(crate) fn cache_dir(root_path: &Path) -> PathBuf {
+    project_folder(root_path).join(CACHE_FOLDER)
+}
+
+/// Get the path to a per-entry manifest file. The entry name is sanitized so
+/// that any unexpected character becomes safe on disk; under normal use the
+/// name is already validated by `git::parse_repo_link`.
+pub(crate) fn cache_path(root_path: &Path, entry_name: &str) -> PathBuf {
+    let mut filename = sanitize_for_filename(entry_name);
+    filename.push_str(".toml");
+    cache_dir(root_path).join(filename)
+}
+
+fn sanitize_for_filename(name: &str) -> String {
+    let mut out = String::with_capacity(name.len());
+    for c in name.chars() {
+        if c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.' {
+            out.push(c);
+        } else {
+            // Percent-encode bytes outside the safe set; rare in practice.
+            let mut buf = [0u8; 4];
+            for byte in c.encode_utf8(&mut buf).bytes() {
+                out.push_str(&format!("%{:02X}", byte));
+            }
+        }
+    }
+    out
 }
 
 /// Resolve a user-supplied target folder against the current working directory
@@ -183,6 +214,23 @@ mod tests {
         let result = resolve_inside_root(Path::new("link"), root, root);
         assert!(result.is_err());
         assert!(format!("{:#}", result.unwrap_err()).contains("symlink"));
+    }
+
+    #[test]
+    fn cache_path_uses_safe_name() {
+        let root = Path::new("/repo");
+        assert_eq!(
+            cache_path(root, "foo-bar.baz"),
+            PathBuf::from("/repo/.embd/cache/foo-bar.baz.toml")
+        );
+    }
+
+    #[test]
+    fn cache_path_percent_encodes_unsafe_chars() {
+        let root = Path::new("/repo");
+        // Slash isn't allowed by parse_repo_link, but the helper is defensive.
+        let got = cache_path(root, "a/b");
+        assert_eq!(got, PathBuf::from("/repo/.embd/cache/a%2Fb.toml"));
     }
 
     #[test]
