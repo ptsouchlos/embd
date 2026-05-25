@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use tempfile::tempdir;
 
+use crate::cache::Manifest;
 use crate::config::{self, EmbdEntry};
 use crate::{filesystem, git, paths};
 
@@ -68,16 +69,20 @@ pub(crate) fn execute(args: AddArgs) -> Result<()> {
     // so we never leave on-disk state without a matching config entry.
     filesystem::copy_dir(tmp.path(), &folder_abs)?;
 
+    let manifest_path = paths::cache_path(&root, &repo_name);
+
     let result = (|| -> Result<()> {
+        let manifest = Manifest::build_from_path(&folder_abs, commit_hash.clone())?;
+        manifest.save(&manifest_path)?;
         config.insert(
             repo_name.clone(),
             EmbdEntry {
                 remote: link,
                 commit_hash,
                 folder: folder_rel,
+                allow_untracked: args.allow_untracked,
             },
         )?;
-        // Save the config
         config.save(&config_path)?;
         Ok(())
     })();
@@ -85,6 +90,8 @@ pub(crate) fn execute(args: AddArgs) -> Result<()> {
     if let Err(e) = result {
         // If there was an error, try to rollback to the previous state.
         rollback(&folder_abs, folder_existed, args.allow_untracked);
+        // The manifest may or may not have been written; remove it regardless.
+        let _ = std::fs::remove_file(&manifest_path);
         // Propagate the error up to the caller
         return Err(e);
     }
