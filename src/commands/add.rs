@@ -19,8 +19,8 @@ pub(crate) struct AddArgs {
         help = "Turn on to allow untracked files in target folder"
     )]
     allow_untracked: bool,
-    #[clap(short, long, help = "Commit hash or tag to pull")]
-    git_tag: Option<String>,
+    #[clap(short, long, help = "Commit hash, tag, or branch to pull")]
+    rev: Option<String>,
 }
 
 pub(crate) fn execute(args: AddArgs) -> Result<()> {
@@ -57,10 +57,10 @@ pub(crate) fn execute(args: AddArgs) -> Result<()> {
     }
 
     let tmp = tempdir().context("failed to create temporary directory")?;
-    let shallow = args.git_tag.is_none();
+    let shallow = args.rev.is_none();
     git::cli::clone(&link, tmp.path(), shallow)?;
-    if let Some(ref tag) = args.git_tag {
-        git::cli::checkout(tmp.path(), tag.clone())?;
+    if let Some(ref rev) = args.rev {
+        git::cli::checkout(tmp.path(), rev.clone())?;
     }
 
     let commit_hash = git::cli::commit_hash_of(tmp.path())?;
