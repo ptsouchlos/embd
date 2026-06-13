@@ -1,8 +1,16 @@
 //! This module contains helpers for the filesystem.
 
+use std::ffi::OsStr;
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
+
+/// Return true if a directory entry should be skipped when walking embedded
+/// folders (both during copy and during status hashing). Centralizing the rule
+/// here keeps the two walkers in sync.
+pub(crate) fn is_skipped_entry(name: &OsStr) -> bool {
+    name == ".git"
+}
 
 /// Recursively copy a directory from `src` to `dst`, ignoring any `.git` directories.
 ///
@@ -24,7 +32,8 @@ pub(crate) fn copy_dir(src: &Path, dst: &Path) -> Result<()> {
     {
         let entry = entry?;
         let name = entry.file_name();
-        if name == ".git" {
+        if is_skipped_entry(&name) {
+            println!("Skipping {}", name.to_str().unwrap_or("failed"));
             continue;
         }
         let src_path = entry.path();

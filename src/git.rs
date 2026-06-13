@@ -37,11 +37,36 @@ pub(crate) fn parse_repo_link(link: &str) -> Result<(String, String)> {
         .find(|s| !s.is_empty())
         .with_context(|| format!("could not extract repo name from {trimmed}"))?;
     let name = last.strip_suffix(".git").unwrap_or(last);
-    if name.is_empty() {
-        bail!("could not extract repo name from {trimmed}");
-    }
+    validate_repo_name(name)
+        .with_context(|| format!("could not extract a valid repo name from {trimmed}"))?;
 
     Ok((trimmed.to_string(), name.to_string()))
+}
+
+/// Validate that a repository name is safe to use as a filename and config key.
+///
+/// Accepts `[A-Za-z0-9_][A-Za-z0-9._-]*`. This keeps the name suitable for use
+/// as a manifest filename across platforms and avoids shell/path footguns like
+/// names beginning with `-` or `.`.
+fn validate_repo_name(name: &str) -> Result<()> {
+    if name.is_empty() {
+        bail!("repo name is empty");
+    }
+    let mut chars = name.chars();
+    let first = chars.next().unwrap();
+    if !(first.is_ascii_alphanumeric() || first == '_') {
+        bail!(
+            "repo name '{name}' must start with an ASCII letter, digit, or underscore"
+        );
+    }
+    for c in chars {
+        if !(c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.') {
+            bail!(
+                "repo name '{name}' contains an unsupported character '{c}' (allowed: letters, digits, '_', '-', '.')"
+            );
+        }
+    }
+    Ok(())
 }
 
 /// Recognize scp-style SSH refs like `git@host:org/repo.git` and return the
@@ -224,5 +249,27 @@ mod tests {
     #[test]
     fn parse_garbage_fails() {
         assert!(parse_repo_link("not a url").is_err());
+    }
+
+    #[test]
+    fn rejects_name_starting_with_dash() {
+        assert!(parse_repo_link("git@github.com:org/-rf.git").is_err());
+    }
+
+    #[test]
+    fn rejects_name_starting_with_dot() {
+        assert!(parse_repo_link("git@github.com:org/.hidden.git").is_err());
+    }
+
+    #[test]
+    fn rejects_name_with_space() {
+        // URL parsing escapes the space, but the SSH path lets one through.
+        assert!(parse_repo_link("git@github.com:org/foo bar.git").is_err());
+    }
+
+    #[test]
+    fn accepts_name_with_dots_and_dashes_inside() {
+        let (_, name) = parse_repo_link("https://github.com/org/foo.bar-baz.git").unwrap();
+        assert_eq!(name, "foo.bar-baz");
     }
 }

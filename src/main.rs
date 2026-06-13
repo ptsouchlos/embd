@@ -2,6 +2,8 @@ use anyhow::Result;
 use clap::Parser;
 
 use crate::commands::add::AddArgs;
+use crate::commands::status::StatusArgs;
+mod cache;
 mod commands;
 mod config;
 mod filesystem;
@@ -13,6 +15,8 @@ mod paths;
 enum Command {
     #[command(about, long_about = "Add a new submodule/embed.")]
     Add(AddArgs),
+    #[command(about, long_about = "Show drift between embeds and the config.")]
+    Status(StatusArgs),
 }
 
 #[derive(Parser, Debug)]
@@ -26,6 +30,7 @@ fn run() -> Result<()> {
     let opts = Options::parse();
     match opts.command {
         Command::Add(add_args) => commands::add::execute(add_args)?,
+        Command::Status(status_args) => commands::status::execute(status_args)?,
     }
     Ok(())
 }

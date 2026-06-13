@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
@@ -10,12 +10,13 @@ pub struct EmbdEntry {
     pub remote: String,
     pub commit_hash: String,
     pub folder: PathBuf,
+    pub allow_untracked: bool,
 }
 
 /// Represents a configuration for `embd` for a single project/directory.
 /// This does not represent a global configuration for the CLI on a given system.
 #[derive(Debug, Default, Serialize, Deserialize)]
-pub struct Config(HashMap<String, EmbdEntry>);
+pub struct Config(BTreeMap<String, EmbdEntry>);
 
 impl Config {
     /// Load the configuration from a given path.
@@ -74,9 +75,13 @@ impl Config {
     ///
     /// # Returns
     /// An [`EmbdEntry`] if one exists at the given identifier. None otherwise.
-    #[allow(dead_code)]
     pub fn get(&self, name: &str) -> Option<&EmbdEntry> {
         self.0.get(name)
+    }
+
+    /// Iterate over all entries in deterministic (sorted) order.
+    pub fn iter(&self) -> impl Iterator<Item = (&str, &EmbdEntry)> {
+        self.0.iter().map(|(k, v)| (k.as_str(), v))
     }
 
     /// Check if the configuration contains an entry for the given name.
@@ -124,6 +129,7 @@ mod tests {
             remote: remote.to_string(),
             commit_hash: commit_hash.to_string(),
             folder: PathBuf::from(folder),
+            allow_untracked: false,
         }
     }
 
@@ -225,6 +231,7 @@ mod tests {
 remote = "https://example.git"
 commit_hash = "abc123"
 folder = "third_party/repo1"
+allow_untracked = false
 "#,
         )
         .unwrap();
@@ -239,6 +246,44 @@ folder = "third_party/repo1"
         let result = Config::load(Path::new("/nonexistent/path/config.toml"));
         assert!(result.is_err());
         assert!(format!("{:#}", result.unwrap_err()).contains("failed to read config"));
+    }
+
+    #[test]
+    fn load_rejects_toml_missing_allow_untracked() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(
+            &path,
+            r#"
+[repo1]
+remote = "https://example.git"
+commit_hash = "abc123"
+folder = "third_party/repo1"
+"#,
+        )
+        .unwrap();
+        let result = Config::load(&path);
+        assert!(result.is_err(), "missing allow_untracked must be rejected");
+        assert!(
+            format!("{:#}", result.unwrap_err()).contains("allow_untracked"),
+            "error should mention the missing field"
+        );
+    }
+
+    #[test]
+    fn iter_yields_entries_in_sorted_order() {
+        let mut config = Config::default();
+        config
+            .insert("zebra".to_string(), entry("https://z.git", "z", "z"))
+            .unwrap();
+        config
+            .insert("alpha".to_string(), entry("https://a.git", "a", "a"))
+            .unwrap();
+        config
+            .insert("mango".to_string(), entry("https://m.git", "m", "m"))
+            .unwrap();
+        let names: Vec<&str> = config.iter().map(|(n, _)| n).collect();
+        assert_eq!(names, vec!["alpha", "mango", "zebra"]);
     }
 
     #[test]
