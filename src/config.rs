@@ -5,7 +5,7 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
 /// Represents a single entry in the `embd` configuration file.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EmbdEntry {
     pub remote: String,
     pub commit_hash: String,
@@ -77,6 +77,13 @@ impl Config {
     /// An [`EmbdEntry`] if one exists at the given identifier. None otherwise.
     pub fn get(&self, name: &str) -> Option<&EmbdEntry> {
         self.0.get(name)
+    }
+
+    /// Get a mutable reference to an entry for in-place mutation (e.g. bumping
+    /// the pinned commit). The caller is responsible for calling [`Config::save`]
+    /// afterwards to persist the change.
+    pub fn get_mut(&mut self, name: &str) -> Option<&mut EmbdEntry> {
+        self.0.get_mut(name)
     }
 
     /// Iterate over all entries in deterministic (sorted) order.
@@ -268,6 +275,21 @@ folder = "third_party/repo1"
             format!("{:#}", result.unwrap_err()).contains("allow_untracked"),
             "error should mention the missing field"
         );
+    }
+
+    #[test]
+    fn get_mut_allows_in_place_mutation() {
+        let mut config = Config::default();
+        config
+            .insert(
+                "mylib".to_string(),
+                entry("https://example.git", "abc123", "third_party/mylib"),
+            )
+            .unwrap();
+        let e = config.get_mut("mylib").unwrap();
+        e.commit_hash = "def456".to_string();
+        assert_eq!(config.get("mylib").unwrap().commit_hash, "def456");
+        assert!(config.get_mut("missing").is_none());
     }
 
     #[test]

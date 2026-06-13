@@ -3,6 +3,7 @@ use clap::Parser;
 
 use crate::commands::add::AddArgs;
 use crate::commands::status::StatusArgs;
+use crate::commands::update::UpdateArgs;
 mod cache;
 mod commands;
 mod config;
@@ -17,6 +18,8 @@ enum Command {
     Add(AddArgs),
     #[command(about, long_about = "Show drift between embeds and the config.")]
     Status(StatusArgs),
+    #[command(about, long_about = "Apply pinned embeds to disk; optionally bump pins with --rev.")]
+    Update(UpdateArgs),
 }
 
 #[derive(Parser, Debug)]
@@ -31,6 +34,7 @@ fn run() -> Result<()> {
     match opts.command {
         Command::Add(add_args) => commands::add::execute(add_args)?,
         Command::Status(status_args) => commands::status::execute(status_args)?,
+        Command::Update(update_args) => commands::update::execute(update_args)?,
     }
     Ok(())
 }
