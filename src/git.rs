@@ -1,5 +1,6 @@
 //! This module abstracts the git functionality needed to make `embd` work so that
 //! the tool can continue to work whether a global git executable is available or not.
+//! Note that currently, git is required.
 
 use anyhow::{Context, Result, bail};
 use url::Url;
@@ -55,9 +56,7 @@ fn validate_repo_name(name: &str) -> Result<()> {
     let mut chars = name.chars();
     let first = chars.next().unwrap();
     if !(first.is_ascii_alphanumeric() || first == '_') {
-        bail!(
-            "repo name '{name}' must start with an ASCII letter, digit, or underscore"
-        );
+        bail!("repo name '{name}' must start with an ASCII letter, digit, or underscore");
     }
     for c in chars {
         if !(c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.') {
