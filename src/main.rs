@@ -18,7 +18,10 @@ enum Command {
     Add(AddArgs),
     #[command(about, long_about = "Show drift between embeds and the config.")]
     Status(StatusArgs),
-    #[command(about, long_about = "Apply pinned embeds to disk; optionally bump pins with --rev.")]
+    #[command(
+        about,
+        long_about = "Apply pinned embeds to disk; optionally bump pins with --rev."
+    )]
     Update(UpdateArgs),
 }
 
