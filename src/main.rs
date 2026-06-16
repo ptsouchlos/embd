@@ -8,6 +8,7 @@ mod cache;
 mod commands;
 mod config;
 mod filesystem;
+mod filter;
 mod git;
 mod paths;
 

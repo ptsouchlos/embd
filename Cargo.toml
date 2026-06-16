@@ -12,5 +12,6 @@ tempfile = "3"
 url = "2.5.8"
 sha2 = "0.11"
 base16ct = "1.0.0"
+globset = "0.4.18"
 
 [dev-dependencies]
