@@ -1,0 +1,29 @@
+name: Build and test
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        os: [ubuntu-22.04, ubuntu-22.04-arm, macos-26, windows-2025]
+        rust: [stable, beta, nightly]
+        build-type: [debug, release]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Rust ${{ matrix.rust }}
+        run: rustup default ${{ matrix.rust }}
+      - uses: actions/checkout@v6
+        with:
+          lfs: true
+      - name: Install just
+        uses: extractions/setup-just@v4
+      - name: Run tests
+        run: just test ${{ matrix.build-type }}
