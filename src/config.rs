@@ -11,6 +11,12 @@ pub struct EmbdEntry {
     pub commit_hash: String,
     pub folder: PathBuf,
     pub allow_untracked: bool,
+    /// Glob patterns; when non-empty, only matching files are pulled.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub include: Vec<String>,
+    /// Glob patterns; matching files are never pulled (excludes win over includes).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub exclude: Vec<String>,
 }
 
 /// Represents a configuration for `embd` for a single project/directory.
@@ -137,6 +143,8 @@ mod tests {
             commit_hash: commit_hash.to_string(),
             folder: PathBuf::from(folder),
             allow_untracked: false,
+            include: Vec::new(),
+            exclude: Vec::new(),
         }
     }
 
