@@ -128,7 +128,7 @@ pub(crate) fn hash_file(path: &Path) -> Result<String> {
         hasher.update(&buf[..n]);
     }
     let digest = hasher.finalize();
-    Ok(format!("sha256:{:x}", digest))
+    Ok(format!("sha256:{:x}", base16ct::HexDisplay(&digest)))
 }
 
 /// Convert a relative path to the string key used in the manifest. Paths are
