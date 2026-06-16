@@ -7,7 +7,7 @@ edition = "2024"
 anyhow = "1"
 clap = { version = "4.5.57", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
-toml = "0.8"
+toml = "1.1"
 tempfile = "3"
 url = "2.5.8"
 sha2 = "0.10"
