@@ -5,7 +5,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 
-use crate::cache::path_to_key;
+use crate::lockfile::path_to_key;
 use crate::filter::Filter;
 
 /// Return true if a directory entry should be skipped when walking embedded
