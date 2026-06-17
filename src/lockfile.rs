@@ -1,8 +1,7 @@
 //! Consolidated lock file used by `embd status` to detect drift between the
 //! files on disk and what was originally synced by `add`. A single
 //! `.embd/embd.lock` holds one [`LockEntry`] per config entry, keyed by entry
-//! name. The lock file is intentionally gitignored — embed maintenance is the
-//! maintainer's burden, not the consumer's.
+//! name.
 
 use std::collections::BTreeMap;
 use std::fs::File;
@@ -62,7 +61,9 @@ impl LockEntry {
 /// The consolidated lock file: one [`LockEntry`] per config entry, keyed by the
 /// entry name. Stored as a single `.embd/embd.lock` so the whole locked state
 /// reads and writes atomically and entry names are TOML keys rather than
-/// filenames.
+/// filenames. This has the consequence of the same repository not being able to
+/// be added twice to a given project in different directories. I don't think
+/// there is a use case for this currently, but that could change in the future.
 #[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct Lockfile {
     pub schema_version: u32,
@@ -88,7 +89,7 @@ impl Lockfile {
     }
 
     /// Load the lock file, or return an empty default when the file does not yet
-    /// exist. A present-but-unreadable file is an error.
+    /// exist. A present but unreadable file is an error.
     pub(crate) fn load_or_default(path: &Path) -> Result<Self> {
         match Self::load(path) {
             Ok(lock) => Ok(lock),
