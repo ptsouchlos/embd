@@ -5,8 +5,8 @@ use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 
-use crate::lockfile::path_to_key;
 use crate::filter::Filter;
+use crate::lockfile::path_to_key;
 
 /// Return true if a directory entry should be skipped when walking embedded
 /// folders (both during copy and during status hashing). Centralizing the rule
