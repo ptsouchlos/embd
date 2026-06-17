@@ -6,7 +6,7 @@ An additional goal of `embd` is to be more general purpose than `beman-submodule
 
 ## Why?
 
-Both `beman-submodule` and `embd` aim to be alternatives to either [git submodules]() and [git subtree](). [Eddie Nolan](https://www.ednolan.com) put together a set of [slides](https://www.ednolan.com/toolchains_slides.pdf) to show the differences and limitations of both `git subtree` and `git submodule`, so I won't go into that too much here. The gist is that `git submodule` provides a subpar user experience (users have to remember to run `git submodule update --init`) and `git subtree`s force merge commits in your history.
+Both `beman-submodule` and `embd` aim to be alternatives to either [git submodules](https://git-scm.com/book/en/v2/Git-Tools-Submodules) and [git subtree](https://www.atlassian.com/git/tutorials/git-subtree). [Eddie Nolan](https://www.ednolan.com) put together a set of [slides](https://www.ednolan.com/toolchains_slides.pdf) to show the differences and limitations of both `git subtree` and `git submodule`, so I won't go into that too much here. The gist is that `git submodule` provides a subpar user experience (users have to remember to run `git submodule update --init`) and `git subtree`s force merge commits in your history.
 
 ## What's the solution?
 
@@ -38,6 +38,6 @@ commit_hash=123abcd1234
 folder=/example2
 ```
 
-### Cache
+### Lockfile
 
-In addition to the config file, `embd` maintains a cache to check for differences in the local files and changes to the subfolder an embed is put into.
+In addition to the config file, `embd` maintains a lockfile to check for differences in the local files and changes to the subfolder an embed is put into. This serves as an easy way to verify file status without pull the files again from the remote location.

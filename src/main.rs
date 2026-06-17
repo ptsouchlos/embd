@@ -4,12 +4,12 @@ use clap::Parser;
 use crate::commands::add::AddArgs;
 use crate::commands::status::StatusArgs;
 use crate::commands::update::UpdateArgs;
-mod cache;
 mod commands;
 mod config;
 mod filesystem;
 mod filter;
 mod git;
+mod lockfile;
 mod paths;
 
 #[derive(Parser, Debug)]

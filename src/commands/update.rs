@@ -4,11 +4,11 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use tempfile::tempdir;
 
-use crate::cache::{self, EntryState, FileChange, Manifest};
 use crate::commands::common::select_entries;
 use crate::commands::status::print_report;
 use crate::config::{self, Config, EmbdEntry};
 use crate::filter::Filter;
+use crate::lockfile::{self, EntryState, FileChange, LockEntry, Lockfile};
 use crate::{git, paths};
 
 #[derive(clap::Args, Debug)]
@@ -40,6 +40,8 @@ pub(crate) fn execute(args: UpdateArgs) -> Result<()> {
     let root = paths::find_git_root()?;
     let config_path = paths::config_path(&root);
     let mut config = config::load_or_default(&config_path)?;
+    let lock_path = paths::lock_path(&root);
+    let mut lock = Lockfile::load_or_default(&lock_path)?;
 
     let selected: Vec<(String, EmbdEntry)> = select_entries(&config, &args.names)?
         .into_iter()
@@ -52,7 +54,16 @@ pub(crate) fn execute(args: UpdateArgs) -> Result<()> {
 
     let mut any_failed = false;
     for (name, entry) in &selected {
-        match process_entry(&root, name, entry, &args, &mut config, &config_path) {
+        match process_entry(
+            &root,
+            name,
+            entry,
+            &args,
+            &mut config,
+            &config_path,
+            &mut lock,
+            &lock_path,
+        ) {
             Ok(outcome) => {
                 print_outcome(name, entry, &outcome, args.quiet);
                 if outcome.is_failure() {
@@ -79,8 +90,8 @@ enum Outcome {
     UpToDate,
     /// Drift detected, `--force` not given. Drift was already printed via `print_report`.
     SkippedDrift,
-    /// Manifest missing, `--force` not given.
-    SkippedNoCache,
+    /// Lockfile missing, `--force` not given.
+    SkippedNoLockfile,
     /// Applied: files synced, manifest saved, config saved if `--rev` bumped the pin.
     Updated {
         old_commit: String,
@@ -91,7 +102,7 @@ enum Outcome {
 
 impl Outcome {
     fn is_failure(&self) -> bool {
-        matches!(self, Outcome::SkippedDrift | Outcome::SkippedNoCache)
+        matches!(self, Outcome::SkippedDrift | Outcome::SkippedNoLockfile)
     }
 }
 
@@ -102,6 +113,7 @@ enum UpdateChange {
     Removed(String), // --overwrite swept this
 }
 
+#[allow(clippy::too_many_arguments)]
 fn process_entry(
     root: &Path,
     name: &str,
@@ -109,8 +121,10 @@ fn process_entry(
     args: &UpdateArgs,
     config: &mut Config,
     config_path: &Path,
+    lock: &mut Lockfile,
+    lock_path: &Path,
 ) -> Result<Outcome> {
-    let report = cache::inspect_entry(root, name, entry);
+    let report = lockfile::inspect_entry(root, name, entry, lock.get(name));
 
     // Short-circuit no-op: only safe when no --rev was requested. With --rev we
     // must still resolve the ref to know whether it changes the pin.
@@ -122,9 +136,9 @@ fn process_entry(
         return Ok(Outcome::UpToDate);
     }
 
-    // No-cache gate. Folder exists but we have no manifest to diff against.
-    if report.state == EntryState::NoCache && !args.force {
-        return Ok(Outcome::SkippedNoCache);
+    // No lockfile gate. Folder exists but we have no manifest to diff against.
+    if report.state == EntryState::Missing && !args.force {
+        return Ok(Outcome::SkippedNoLockfile);
     }
 
     // Drift gate. Only file-level drift requires --force; pure staleness is what
@@ -177,29 +191,30 @@ fn process_entry(
         config.save(config_path)?;
     }
 
-    // Build the prospective manifest from the temp clone, applying the same
+    // Build the prospective lock entry from the temp clone, applying the same
     // include/exclude filter the entry was added with so filtered-out files are
     // never re-introduced.
     let filter = Filter::from_patterns(&entry.include, &entry.exclude)?;
-    let new_manifest = Manifest::build_from_path_filtered(tmp.path(), new_commit.clone(), &filter)?;
+    let new_entry = LockEntry::build_from_path_filtered(tmp.path(), new_commit.clone(), &filter)?;
 
-    // Load the old manifest's file list, or treat as empty for no-cache / folder-missing.
-    let manifest_path = paths::cache_path(root, name);
+    // Take the old file list from the lock entry, or treat as empty for
+    // no-lockfile / folder-missing.
     let old_files: BTreeMap<String, String> = match report.state {
-        EntryState::Compared => Manifest::load(&manifest_path)?.files,
-        EntryState::NoCache | EntryState::FolderMissing => BTreeMap::new(),
+        EntryState::Compared => lock.get(name).map(|e| e.files.clone()).unwrap_or_default(),
+        EntryState::Missing | EntryState::FolderMissing => BTreeMap::new(),
     };
 
     let changes = apply_update(
         tmp.path(),
         &folder_abs,
         &old_files,
-        &new_manifest.files,
+        &new_entry.files,
         args.overwrite,
     )?;
 
-    // Save the new manifest last.
-    new_manifest.save(&manifest_path)?;
+    // Save the updated lock file last.
+    lock.upsert(name.to_string(), new_entry);
+    lock.save(lock_path)?;
 
     Ok(Outcome::Updated {
         old_commit,
@@ -228,7 +243,7 @@ fn apply_update(
 
         if let Ok(meta) = std::fs::symlink_metadata(&dst_path)
             && meta.is_file()
-            && let Ok(disk_hash) = cache::hash_file(&dst_path)
+            && let Ok(disk_hash) = lockfile::hash_file(&dst_path)
             && disk_hash == *new_hash
         {
             continue;
@@ -277,7 +292,7 @@ fn apply_update(
 
     // --overwrite sweep: remove anything on disk that isn't in `new_files`.
     if overwrite {
-        let on_disk = cache::scan_folder(dst).unwrap_or_default();
+        let on_disk = lockfile::scan_folder(dst).unwrap_or_default();
         for key in on_disk.keys() {
             if new_files.contains_key(key) {
                 continue;
@@ -345,7 +360,7 @@ fn print_outcome(name: &str, entry: &EmbdEntry, outcome: &Outcome, quiet: bool) 
     let header = format!("{name} ({})", entry.folder.display());
     match outcome {
         Outcome::UpToDate => println!("{header}: up to date"),
-        Outcome::SkippedNoCache => println!("{header}: no cache (use --force)"),
+        Outcome::SkippedNoLockfile => println!("{header}: no lock file (use --force)"),
         Outcome::SkippedDrift => {
             // The detailed diff was already printed via print_report. Add a trailing
             // hint so the user knows what to do.
@@ -396,7 +411,7 @@ mod tests {
     }
 
     fn manifest_for(folder: &Path, commit: &str) -> BTreeMap<String, String> {
-        Manifest::build_from_path(folder, commit.to_string())
+        LockEntry::build_from_path(folder, commit.to_string())
             .unwrap()
             .files
     }
@@ -547,8 +562,8 @@ mod tests {
     }
 
     #[test]
-    fn apply_no_cache_path_writes_everything_from_new_tree() {
-        // Simulates --force on no-cache: old_files is empty.
+    fn apply_no_lockfile_path_writes_everything_from_new_tree() {
+        // Simulates --force on no-lockfile: old_files is empty.
         let dir = tempdir().unwrap();
         let src = dir.path().join("src");
         let dst = dir.path().join("dst");

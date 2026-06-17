@@ -1,8 +1,8 @@
 use anyhow::Result;
 
-use crate::cache::{self, EntryReport, EntryState, FileChange};
 use crate::commands::common::select_entries;
 use crate::config;
+use crate::lockfile::{self, EntryReport, EntryState, FileChange, Lockfile};
 use crate::paths;
 
 #[derive(clap::Args, Debug)]
@@ -18,11 +18,12 @@ pub(crate) fn execute(args: StatusArgs) -> Result<()> {
     let root = paths::find_git_root()?;
     let config_path = paths::config_path(&root);
     let config = config::load_or_default(&config_path)?;
+    let lock = Lockfile::load_or_default(&paths::lock_path(&root))?;
     let selected = select_entries(&config, &args.names)?;
 
     let mut any_drift = false;
     for (name, entry) in selected {
-        let report = cache::inspect_entry(&root, name, entry);
+        let report = lockfile::inspect_entry(&root, name, entry, lock.get(name));
         any_drift |= report.has_drift();
         print_report(&report, args.quiet);
     }
@@ -41,8 +42,8 @@ pub(crate) fn print_report(report: &EntryReport, quiet: bool) {
             println!("{header}: folder missing");
             return;
         }
-        EntryState::NoCache => {
-            println!("{header}: no cache");
+        EntryState::Missing => {
+            println!("{header}: missing from lock file");
             return;
         }
         EntryState::Compared => {}
