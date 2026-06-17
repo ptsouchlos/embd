@@ -1,7 +1,8 @@
-//! Per-entry hash manifest used by `embd status` to detect drift between the
-//! files on disk and what was originally synced by `add`. The manifest is
-//! intentionally gitignored — embed maintenance is the maintainer's burden,
-//! not the consumer's.
+//! Consolidated lock file used by `embd status` to detect drift between the
+//! files on disk and what was originally synced by `add`. A single
+//! `.embd/embd.lock` holds one [`LockEntry`] per config entry, keyed by entry
+//! name. The lock file is intentionally gitignored — embed maintenance is the
+//! maintainer's burden, not the consumer's.
 
 use std::collections::BTreeMap;
 use std::fs::File;
@@ -16,31 +17,32 @@ use tempfile::NamedTempFile;
 use crate::config::EmbdEntry;
 use crate::filesystem;
 use crate::filter::Filter;
-use crate::paths;
 
 const CURRENT_SCHEMA: u32 = 1;
 const HASH_BUFFER_SIZE: usize = 64 * 1024;
+const FILE_COMMENTS: &str = "## This file is automatically generate by embd.
+# It is not intended for manual editing.
+";
 
-/// Snapshot of a synced embed's contents. The `commit_hash` field records the
-/// commit the folder reflects, distinct from [`crate::config::EmbdEntry::commit_hash`]
-/// which records the commit the user *wants*. A mismatch between them is the
-/// "stale" status.
+/// Snapshot of a single synced embed's contents. The `commit_hash` field
+/// records the commit the folder reflects, distinct from
+/// [`crate::config::EmbdEntry::commit_hash`] which records the commit the user
+/// *wants*. A mismatch between them is the "stale" status.
 #[derive(Debug, Serialize, Deserialize)]
-pub(crate) struct Manifest {
-    pub schema_version: u32,
+pub(crate) struct LockEntry {
     pub commit_hash: String,
     pub files: BTreeMap<String, String>,
 }
 
-impl Manifest {
-    /// Build a manifest by hashing every regular file under `root` (excluding
+impl LockEntry {
+    /// Build an entry by hashing every regular file under `root` (excluding
     /// `.git`, never following symlinks).
     pub(crate) fn build_from_path(root: &Path, commit_hash: String) -> Result<Self> {
         Self::build_from_path_filtered(root, commit_hash, &Filter::allow_all())
     }
 
-    /// Like [`Manifest::build_from_path`], but only hashes files accepted by
-    /// `filter`. Used by `update` so the rebuilt manifest reflects the same
+    /// Like [`LockEntry::build_from_path`], but only hashes files accepted by
+    /// `filter`. Used by `update` so the rebuilt entry reflects the same
     /// include/exclude rules `add` applied.
     pub(crate) fn build_from_path_filtered(
         root: &Path,
@@ -53,36 +55,86 @@ impl Manifest {
             let hash = hash_file(&absolute)?;
             files.insert(path_to_key(&relative), hash);
         }
-        Ok(Self {
-            schema_version: CURRENT_SCHEMA,
-            commit_hash,
-            files,
-        })
+        Ok(Self { commit_hash, files })
     }
+}
 
+/// The consolidated lock file: one [`LockEntry`] per config entry, keyed by the
+/// entry name. Stored as a single `.embd/embd.lock` so the whole locked state
+/// reads and writes atomically and entry names are TOML keys rather than
+/// filenames.
+#[derive(Debug, Serialize, Deserialize)]
+pub(crate) struct Lockfile {
+    pub schema_version: u32,
+    #[serde(default)]
+    pub entries: BTreeMap<String, LockEntry>,
+}
+
+impl Default for Lockfile {
+    fn default() -> Self {
+        Self {
+            schema_version: CURRENT_SCHEMA,
+            entries: BTreeMap::new(),
+        }
+    }
+}
+
+impl Lockfile {
     pub(crate) fn load(path: &Path) -> Result<Self> {
         let content = std::fs::read_to_string(path)
-            .with_context(|| format!("failed to read manifest from {}", path.display()))?;
+            .with_context(|| format!("failed to read lock file from {}", path.display()))?;
         toml::from_str(&content)
-            .with_context(|| format!("failed to parse manifest at {}", path.display()))
+            .with_context(|| format!("failed to parse lock file at {}", path.display()))
     }
 
-    /// Save the manifest with a tmpfile-then-rename so a crash mid-write can't
+    /// Load the lock file, or return an empty default when the file does not yet
+    /// exist. A present-but-unreadable file is an error.
+    pub(crate) fn load_or_default(path: &Path) -> Result<Self> {
+        match Self::load(path) {
+            Ok(lock) => Ok(lock),
+            Err(e) => {
+                if e.downcast_ref::<std::io::Error>()
+                    .is_some_and(|io| io.kind() == std::io::ErrorKind::NotFound)
+                {
+                    Ok(Self::default())
+                } else {
+                    Err(e)
+                }
+            }
+        }
+    }
+
+    /// Save the lock file with a tmpfile-then-rename so a crash mid-write can't
     /// leave a torn file.
     pub(crate) fn save(&self, path: &Path) -> Result<()> {
-        let parent = path
-            .parent()
-            .with_context(|| format!("manifest path {} has no parent directory", path.display()))?;
+        let parent = path.parent().with_context(|| {
+            format!("lock file path {} has no parent directory", path.display())
+        })?;
         std::fs::create_dir_all(parent)
             .with_context(|| format!("failed to create directory {}", parent.display()))?;
-        let content = toml::to_string_pretty(self).context("failed to serialize manifest")?;
+        let content = toml::to_string_pretty(self).context("failed to serialize lock file")?;
         let mut tmp = NamedTempFile::new_in(parent)
             .with_context(|| format!("failed to create temp file in {}", parent.display()))?;
+
+        tmp.write_all(FILE_COMMENTS.as_bytes())
+            .context("failed to write lock file comments")?;
         tmp.write_all(content.as_bytes())
-            .context("failed to write manifest content")?;
+            .context("failed to write lock file content")?;
         tmp.persist(path)
-            .with_context(|| format!("failed to persist manifest to {}", path.display()))?;
+            .with_context(|| format!("failed to persist lock file to {}", path.display()))?;
         Ok(())
+    }
+
+    pub(crate) fn get(&self, name: &str) -> Option<&LockEntry> {
+        self.entries.get(name)
+    }
+
+    pub(crate) fn upsert(&mut self, name: String, entry: LockEntry) {
+        self.entries.insert(name, entry);
+    }
+
+    pub(crate) fn remove(&mut self, name: &str) -> Option<LockEntry> {
+        self.entries.remove(name)
     }
 }
 
@@ -218,7 +270,12 @@ pub(crate) enum DiskEntry {
     Symlink,
 }
 
-pub(crate) fn inspect_entry<'a>(root: &Path, name: &'a str, entry: &EmbdEntry) -> EntryReport<'a> {
+pub(crate) fn inspect_entry<'a>(
+    root: &Path,
+    name: &'a str,
+    entry: &EmbdEntry,
+    lock_entry: Option<&LockEntry>,
+) -> EntryReport<'a> {
     let folder_abs = root.join(&entry.folder);
     let mut report = EntryReport {
         name,
@@ -234,23 +291,16 @@ pub(crate) fn inspect_entry<'a>(root: &Path, name: &'a str, entry: &EmbdEntry) -
         return report;
     }
 
-    let manifest_path = paths::cache_path(root, name);
-    let manifest = match Manifest::load(&manifest_path) {
-        Ok(m) => m,
-        Err(_) if !manifest_path.exists() => {
-            report.state = EntryState::NoCache;
-            return report;
-        }
-        Err(e) => {
-            // Manifest present but unreadable — surface and treat as no-cache.
-            eprintln!("warning: failed to load manifest for '{}': {}", name, e);
+    let lock_entry = match lock_entry {
+        Some(e) => e,
+        None => {
             report.state = EntryState::NoCache;
             return report;
         }
     };
 
-    if manifest.commit_hash != entry.commit_hash {
-        report.stale = Some((manifest.commit_hash.clone(), entry.commit_hash.clone()));
+    if lock_entry.commit_hash != entry.commit_hash {
+        report.stale = Some((lock_entry.commit_hash.clone(), entry.commit_hash.clone()));
     }
 
     let on_disk = match scan_folder(&folder_abs) {
@@ -263,7 +313,7 @@ pub(crate) fn inspect_entry<'a>(root: &Path, name: &'a str, entry: &EmbdEntry) -
     };
 
     // Modified / Deleted / Symlink-at-tracked-path
-    for (key, expected_hash) in &manifest.files {
+    for (key, expected_hash) in &lock_entry.files {
         match on_disk.get(key) {
             Some(DiskEntry::Regular { hash }) if hash == expected_hash => {}
             Some(DiskEntry::Regular { .. }) => {
@@ -280,7 +330,7 @@ pub(crate) fn inspect_entry<'a>(root: &Path, name: &'a str, entry: &EmbdEntry) -
 
     // Untracked / new-symlink
     for (key, disk_entry) in &on_disk {
-        if manifest.files.contains_key(key) {
+        if lock_entry.files.contains_key(key) {
             continue;
         }
         match disk_entry {
@@ -380,7 +430,10 @@ mod tests {
         }
     }
 
-    fn fixture(commit: &str, files: &[(&str, &str)]) -> (tempfile::TempDir, PathBuf, String) {
+    fn fixture(
+        commit: &str,
+        files: &[(&str, &str)],
+    ) -> (tempfile::TempDir, PathBuf, String, Lockfile) {
         let dir = tempdir().unwrap();
         let root = dir.path().to_path_buf();
         let folder = root.join("vendor/foo");
@@ -392,17 +445,17 @@ mod tests {
             }
             fs::write(path, contents).unwrap();
         }
-        let manifest = Manifest::build_from_path(&folder, commit.into()).unwrap();
-        let manifest_path = paths::cache_path(&root, "foo");
-        manifest.save(&manifest_path).unwrap();
-        (dir, root, "foo".into())
+        let entry = LockEntry::build_from_path(&folder, commit.into()).unwrap();
+        let mut lock = Lockfile::default();
+        lock.upsert("foo".into(), entry);
+        (dir, root, "foo".into(), lock)
     }
 
     #[test]
     fn reports_clean_when_folder_matches_manifest() {
-        let (_dir, root, name) = fixture("abc123", &[("a.txt", "alpha")]);
+        let (_dir, root, name, lock) = fixture("abc123", &[("a.txt", "alpha")]);
         let entry = make_entry("vendor/foo", "abc123", false);
-        let report = inspect_entry(&root, &name, &entry);
+        let report = inspect_entry(&root, &name, &entry, lock.get(&name));
         assert_eq!(report.state, EntryState::Compared);
         assert!(report.changes.is_empty());
         assert!(report.stale.is_none());
@@ -411,30 +464,30 @@ mod tests {
 
     #[test]
     fn reports_modified_file() {
-        let (_dir, root, name) = fixture("abc123", &[("a.txt", "alpha")]);
+        let (_dir, root, name, lock) = fixture("abc123", &[("a.txt", "alpha")]);
         let entry = make_entry("vendor/foo", "abc123", false);
         fs::write(root.join("vendor/foo/a.txt"), "ALPHA").unwrap();
-        let report = inspect_entry(&root, &name, &entry);
+        let report = inspect_entry(&root, &name, &entry, lock.get(&name));
         assert_eq!(report.changes, vec![FileChange::Modified("a.txt".into())]);
         assert!(report.has_drift());
     }
 
     #[test]
     fn reports_deleted_file() {
-        let (_dir, root, name) = fixture("abc123", &[("a.txt", "alpha"), ("b.txt", "beta")]);
+        let (_dir, root, name, lock) = fixture("abc123", &[("a.txt", "alpha"), ("b.txt", "beta")]);
         let entry = make_entry("vendor/foo", "abc123", false);
         fs::remove_file(root.join("vendor/foo/a.txt")).unwrap();
-        let report = inspect_entry(&root, &name, &entry);
+        let report = inspect_entry(&root, &name, &entry, lock.get(&name));
         assert_eq!(report.changes, vec![FileChange::Deleted("a.txt".into())]);
         assert!(report.has_drift());
     }
 
     #[test]
     fn untracked_is_drift_when_flag_off() {
-        let (_dir, root, name) = fixture("abc123", &[("a.txt", "alpha")]);
+        let (_dir, root, name, lock) = fixture("abc123", &[("a.txt", "alpha")]);
         let entry = make_entry("vendor/foo", "abc123", false);
         fs::write(root.join("vendor/foo/extra.txt"), "x").unwrap();
-        let report = inspect_entry(&root, &name, &entry);
+        let report = inspect_entry(&root, &name, &entry, lock.get(&name));
         assert_eq!(
             report.changes,
             vec![FileChange::Untracked("extra.txt".into())]
@@ -444,10 +497,10 @@ mod tests {
 
     #[test]
     fn untracked_is_clean_when_flag_on() {
-        let (_dir, root, name) = fixture("abc123", &[("a.txt", "alpha")]);
+        let (_dir, root, name, lock) = fixture("abc123", &[("a.txt", "alpha")]);
         let entry = make_entry("vendor/foo", "abc123", true);
         fs::write(root.join("vendor/foo/extra.txt"), "x").unwrap();
-        let report = inspect_entry(&root, &name, &entry);
+        let report = inspect_entry(&root, &name, &entry, lock.get(&name));
         assert_eq!(
             report.changes,
             vec![FileChange::Untracked("extra.txt".into())]
@@ -457,11 +510,11 @@ mod tests {
 
     #[test]
     fn modified_overrides_allow_untracked() {
-        let (_dir, root, name) = fixture("abc123", &[("a.txt", "alpha")]);
+        let (_dir, root, name, lock) = fixture("abc123", &[("a.txt", "alpha")]);
         let entry = make_entry("vendor/foo", "abc123", true);
         fs::write(root.join("vendor/foo/a.txt"), "ALPHA").unwrap();
         fs::write(root.join("vendor/foo/extra.txt"), "x").unwrap();
-        let report = inspect_entry(&root, &name, &entry);
+        let report = inspect_entry(&root, &name, &entry, lock.get(&name));
         assert!(
             report.has_drift(),
             "modified file must always count as drift"
@@ -470,41 +523,41 @@ mod tests {
 
     #[test]
     fn stale_when_config_commit_differs() {
-        let (_dir, root, name) = fixture("abc123", &[("a.txt", "alpha")]);
+        let (_dir, root, name, lock) = fixture("abc123", &[("a.txt", "alpha")]);
         let entry = make_entry("vendor/foo", "def456", false);
-        let report = inspect_entry(&root, &name, &entry);
+        let report = inspect_entry(&root, &name, &entry, lock.get(&name));
         assert_eq!(report.stale, Some(("abc123".into(), "def456".into())));
         assert!(report.has_drift());
     }
 
     #[test]
     fn folder_missing_reports_drift() {
-        let (_dir, root, name) = fixture("abc123", &[("a.txt", "alpha")]);
+        let (_dir, root, name, lock) = fixture("abc123", &[("a.txt", "alpha")]);
         let entry = make_entry("vendor/foo", "abc123", false);
         fs::remove_dir_all(root.join("vendor/foo")).unwrap();
-        let report = inspect_entry(&root, &name, &entry);
+        let report = inspect_entry(&root, &name, &entry, lock.get(&name));
         assert_eq!(report.state, EntryState::FolderMissing);
         assert!(report.has_drift());
     }
 
     #[test]
-    fn no_cache_when_manifest_missing() {
-        let (_dir, root, name) = fixture("abc123", &[("a.txt", "alpha")]);
+    fn no_cache_when_lock_entry_missing() {
+        let (_dir, root, name, _lock) = fixture("abc123", &[("a.txt", "alpha")]);
         let entry = make_entry("vendor/foo", "abc123", false);
-        fs::remove_file(paths::cache_path(&root, &name)).unwrap();
-        let report = inspect_entry(&root, &name, &entry);
+        // No lock entry for this name (folder still present) => NoCache.
+        let report = inspect_entry(&root, &name, &entry, None);
         assert_eq!(report.state, EntryState::NoCache);
         assert!(!report.has_drift());
     }
 
     #[test]
     fn change_ordering_is_stable() {
-        let (_dir, root, name) = fixture("abc123", &[("a.txt", "alpha"), ("b.txt", "beta")]);
+        let (_dir, root, name, lock) = fixture("abc123", &[("a.txt", "alpha"), ("b.txt", "beta")]);
         let entry = make_entry("vendor/foo", "abc123", false);
         fs::write(root.join("vendor/foo/b.txt"), "BETA").unwrap();
         fs::remove_file(root.join("vendor/foo/a.txt")).unwrap();
         fs::write(root.join("vendor/foo/z.txt"), "z").unwrap();
-        let report = inspect_entry(&root, &name, &entry);
+        let report = inspect_entry(&root, &name, &entry, lock.get(&name));
         assert_eq!(
             report.changes,
             vec![
@@ -519,10 +572,10 @@ mod tests {
     #[test]
     fn symlink_reported_as_drift() {
         use std::os::unix::fs::symlink;
-        let (_dir, root, name) = fixture("abc123", &[("a.txt", "alpha")]);
+        let (_dir, root, name, lock) = fixture("abc123", &[("a.txt", "alpha")]);
         let entry = make_entry("vendor/foo", "abc123", true);
         symlink("a.txt", root.join("vendor/foo/link.txt")).unwrap();
-        let report = inspect_entry(&root, &name, &entry);
+        let report = inspect_entry(&root, &name, &entry, lock.get(&name));
         assert_eq!(report.changes, vec![FileChange::Symlink("link.txt".into())]);
         assert!(report.has_drift());
     }
@@ -593,36 +646,91 @@ mod tests {
     }
 
     #[test]
-    fn manifest_round_trip() {
+    fn lockfile_round_trip() {
         let dir = tempdir().unwrap();
         std::fs::write(dir.path().join("a.txt"), "alpha").unwrap();
         std::fs::create_dir_all(dir.path().join("sub")).unwrap();
         std::fs::write(dir.path().join("sub/b.txt"), "beta").unwrap();
 
-        let manifest = Manifest::build_from_path(dir.path(), "abc123".into()).unwrap();
-        assert_eq!(manifest.commit_hash, "abc123");
-        assert_eq!(manifest.files.len(), 2);
-        assert!(manifest.files.contains_key("a.txt"));
-        assert!(manifest.files.contains_key("sub/b.txt"));
+        let entry = LockEntry::build_from_path(dir.path(), "abc123".into()).unwrap();
+        assert_eq!(entry.commit_hash, "abc123");
+        assert_eq!(entry.files.len(), 2);
+        assert!(entry.files.contains_key("a.txt"));
+        assert!(entry.files.contains_key("sub/b.txt"));
 
-        let path = dir.path().join("manifest.toml");
-        manifest.save(&path).unwrap();
-        let loaded = Manifest::load(&path).unwrap();
-        assert_eq!(loaded.commit_hash, "abc123");
+        let mut lock = Lockfile::default();
+        lock.upsert("foo".into(), entry);
+
+        let path = dir.path().join("embd.lock");
+        lock.save(&path).unwrap();
+        let loaded = Lockfile::load(&path).unwrap();
         assert_eq!(loaded.schema_version, CURRENT_SCHEMA);
-        assert_eq!(loaded.files, manifest.files);
+        let loaded_entry = loaded.get("foo").expect("entry should round-trip");
+        assert_eq!(loaded_entry.commit_hash, "abc123");
+        assert_eq!(loaded_entry.files, lock.get("foo").unwrap().files);
     }
 
     #[test]
-    fn manifest_save_creates_parent_directory() {
+    fn lockfile_holds_multiple_entries() {
         let dir = tempdir().unwrap();
-        let path = dir.path().join("nested/cache/foo.toml");
-        let manifest = Manifest {
-            schema_version: CURRENT_SCHEMA,
-            commit_hash: "deadbeef".into(),
-            files: BTreeMap::new(),
-        };
-        manifest.save(&path).unwrap();
+        let mut lock = Lockfile::default();
+        lock.upsert(
+            "alpha".into(),
+            LockEntry {
+                commit_hash: "aaa".into(),
+                files: BTreeMap::new(),
+            },
+        );
+        lock.upsert(
+            "beta".into(),
+            LockEntry {
+                commit_hash: "bbb".into(),
+                files: BTreeMap::new(),
+            },
+        );
+
+        let path = dir.path().join("embd.lock");
+        lock.save(&path).unwrap();
+        let loaded = Lockfile::load(&path).unwrap();
+        assert_eq!(loaded.get("alpha").unwrap().commit_hash, "aaa");
+        assert_eq!(loaded.get("beta").unwrap().commit_hash, "bbb");
+    }
+
+    #[test]
+    fn load_or_default_returns_empty_when_missing() {
+        let dir = tempdir().unwrap();
+        let lock = Lockfile::load_or_default(&dir.path().join("absent.lock")).unwrap();
+        assert!(lock.entries.is_empty());
+        assert_eq!(lock.schema_version, CURRENT_SCHEMA);
+    }
+
+    #[test]
+    fn remove_drops_only_the_named_entry() {
+        let mut lock = Lockfile::default();
+        lock.upsert(
+            "keep".into(),
+            LockEntry {
+                commit_hash: "k".into(),
+                files: BTreeMap::new(),
+            },
+        );
+        lock.upsert(
+            "drop".into(),
+            LockEntry {
+                commit_hash: "d".into(),
+                files: BTreeMap::new(),
+            },
+        );
+        assert!(lock.remove("drop").is_some());
+        assert!(lock.remove("drop").is_none());
+        assert!(lock.get("keep").is_some());
+    }
+
+    #[test]
+    fn lockfile_save_creates_parent_directory() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("nested/embd.lock");
+        Lockfile::default().save(&path).unwrap();
         assert!(path.exists());
     }
 }
