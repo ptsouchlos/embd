@@ -1,14 +1,14 @@
 //! Include/exclude glob filtering for embedded folders. A single [`Filter`] is
 //! the source of truth for "should this file be pulled?", consulted by both the
 //! copy walker (`filesystem::copy_dir`) and the manifest walker
-//! (`cache::build_from_path_filtered`) so `add` and `update` stay in agreement.
+//! (`lockfile::build_from_path_filtered`) so `add` and `update` stay in agreement.
 //!
 //! Semantics: a file is pulled when it matches the include set
 //! (or the include set is empty, meaning "everything") AND it does not match the
 //! exclude set. Excludes therefore win over includes.
 //!
 //! Patterns are matched against forward-slash relative paths (the same keys used
-//! by [`crate::cache::path_to_key`]). Globs are compiled with
+//! by [`crate::lockfile::path_to_key`]). Globs are compiled with
 //! `literal_separator(true)`, so `*` does not cross `/`; use `**` for recursive
 //! matches (e.g. `**/*.rs`, `docs/**`).
 
