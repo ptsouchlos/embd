@@ -43,7 +43,7 @@ pub(crate) fn print_report(report: &EntryReport, quiet: bool) {
             return;
         }
         EntryState::Missing => {
-            println!("{header}: missing from lockfile");
+            println!("{header}: missing from lock file");
             return;
         }
         EntryState::Compared => {}

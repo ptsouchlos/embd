@@ -360,7 +360,7 @@ fn print_outcome(name: &str, entry: &EmbdEntry, outcome: &Outcome, quiet: bool) 
     let header = format!("{name} ({})", entry.folder.display());
     match outcome {
         Outcome::UpToDate => println!("{header}: up to date"),
-        Outcome::SkippedNoLockfile => println!("{header}: no lockfile (use --force)"),
+        Outcome::SkippedNoLockfile => println!("{header}: no lock file (use --force)"),
         Outcome::SkippedDrift => {
             // The detailed diff was already printed via print_report. Add a trailing
             // hint so the user knows what to do.
