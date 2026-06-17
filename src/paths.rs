@@ -16,7 +16,7 @@ pub(crate) fn find_git_root() -> Result<PathBuf> {
     git::cli::find_git_root(cwd)
 }
 
-/// Get the root folder of where `embd` stores information/data/cache.
+/// Get the root folder of where `embd` stores its data.
 ///
 /// # Arguments
 ///
@@ -195,10 +195,7 @@ mod tests {
     #[test]
     fn lock_path_is_inside_project_folder() {
         let root = Path::new("/repo");
-        assert_eq!(
-            lock_path(root),
-            PathBuf::from("/repo/.embd/embd.lock")
-        );
+        assert_eq!(lock_path(root), PathBuf::from("/repo/.embd/embd.lock"));
     }
 
     #[test]

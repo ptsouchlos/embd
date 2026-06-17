@@ -223,7 +223,7 @@ pub(crate) enum FileChange {
 }
 
 /// Aggregate report for a single entry. `Compared`, `FolderMissing`, and
-/// `NoCache` are mutually exclusive; `stale` and `changes` can coexist within
+/// `Missing` are mutually exclusive; `stale` and `changes` can coexist within
 /// `Compared`.
 #[derive(Debug)]
 pub(crate) struct EntryReport<'a> {
@@ -237,17 +237,18 @@ pub(crate) struct EntryReport<'a> {
 
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum EntryState {
-    /// Folder + manifest exist. Drift status is determined by `stale` and `changes`.
+    /// Folder + lockfile exist. Drift status is determined by `stale` and `changes`.
     Compared,
+    // Folder missing
     FolderMissing,
-    NoCache,
+    Missing,
 }
 
 impl EntryReport<'_> {
     pub(crate) fn has_drift(&self) -> bool {
         match self.state {
             EntryState::FolderMissing => true,
-            EntryState::NoCache => false,
+            EntryState::Missing => false,
             EntryState::Compared => {
                 if self.stale.is_some() {
                     return true;
@@ -294,7 +295,8 @@ pub(crate) fn inspect_entry<'a>(
     let lock_entry = match lock_entry {
         Some(e) => e,
         None => {
-            report.state = EntryState::NoCache;
+            // Entry is missing from the lockfile
+            report.state = EntryState::Missing;
             return report;
         }
     };
@@ -541,12 +543,12 @@ mod tests {
     }
 
     #[test]
-    fn no_cache_when_lock_entry_missing() {
+    fn entry_state_missing_when_lock_entry_missing() {
         let (_dir, root, name, _lock) = fixture("abc123", &[("a.txt", "alpha")]);
         let entry = make_entry("vendor/foo", "abc123", false);
-        // No lock entry for this name (folder still present) => NoCache.
+        // No lock entry for this name (folder still present)
         let report = inspect_entry(&root, &name, &entry, None);
-        assert_eq!(report.state, EntryState::NoCache);
+        assert_eq!(report.state, EntryState::Missing);
         assert!(!report.has_drift());
     }
 

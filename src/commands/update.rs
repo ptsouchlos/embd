@@ -4,11 +4,11 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use tempfile::tempdir;
 
-use crate::lockfile::{self, EntryState, FileChange, LockEntry, Lockfile};
 use crate::commands::common::select_entries;
 use crate::commands::status::print_report;
 use crate::config::{self, Config, EmbdEntry};
 use crate::filter::Filter;
+use crate::lockfile::{self, EntryState, FileChange, LockEntry, Lockfile};
 use crate::{git, paths};
 
 #[derive(clap::Args, Debug)]
@@ -90,8 +90,8 @@ enum Outcome {
     UpToDate,
     /// Drift detected, `--force` not given. Drift was already printed via `print_report`.
     SkippedDrift,
-    /// Manifest missing, `--force` not given.
-    SkippedNoCache,
+    /// Lockfile missing, `--force` not given.
+    SkippedNoLockfile,
     /// Applied: files synced, manifest saved, config saved if `--rev` bumped the pin.
     Updated {
         old_commit: String,
@@ -102,7 +102,7 @@ enum Outcome {
 
 impl Outcome {
     fn is_failure(&self) -> bool {
-        matches!(self, Outcome::SkippedDrift | Outcome::SkippedNoCache)
+        matches!(self, Outcome::SkippedDrift | Outcome::SkippedNoLockfile)
     }
 }
 
@@ -136,9 +136,9 @@ fn process_entry(
         return Ok(Outcome::UpToDate);
     }
 
-    // No-cache gate. Folder exists but we have no manifest to diff against.
-    if report.state == EntryState::NoCache && !args.force {
-        return Ok(Outcome::SkippedNoCache);
+    // No lockfile gate. Folder exists but we have no manifest to diff against.
+    if report.state == EntryState::Missing && !args.force {
+        return Ok(Outcome::SkippedNoLockfile);
     }
 
     // Drift gate. Only file-level drift requires --force; pure staleness is what
@@ -198,10 +198,10 @@ fn process_entry(
     let new_entry = LockEntry::build_from_path_filtered(tmp.path(), new_commit.clone(), &filter)?;
 
     // Take the old file list from the lock entry, or treat as empty for
-    // no-cache / folder-missing.
+    // no-lockfile / folder-missing.
     let old_files: BTreeMap<String, String> = match report.state {
         EntryState::Compared => lock.get(name).map(|e| e.files.clone()).unwrap_or_default(),
-        EntryState::NoCache | EntryState::FolderMissing => BTreeMap::new(),
+        EntryState::Missing | EntryState::FolderMissing => BTreeMap::new(),
     };
 
     let changes = apply_update(
@@ -360,7 +360,7 @@ fn print_outcome(name: &str, entry: &EmbdEntry, outcome: &Outcome, quiet: bool) 
     let header = format!("{name} ({})", entry.folder.display());
     match outcome {
         Outcome::UpToDate => println!("{header}: up to date"),
-        Outcome::SkippedNoCache => println!("{header}: no cache (use --force)"),
+        Outcome::SkippedNoLockfile => println!("{header}: no lockfile (use --force)"),
         Outcome::SkippedDrift => {
             // The detailed diff was already printed via print_report. Add a trailing
             // hint so the user knows what to do.
@@ -562,8 +562,8 @@ mod tests {
     }
 
     #[test]
-    fn apply_no_cache_path_writes_everything_from_new_tree() {
-        // Simulates --force on no-cache: old_files is empty.
+    fn apply_no_lockfile_path_writes_everything_from_new_tree() {
+        // Simulates --force on no-lockfile: old_files is empty.
         let dir = tempdir().unwrap();
         let src = dir.path().join("src");
         let dst = dir.path().join("dst");

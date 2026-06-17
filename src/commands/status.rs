@@ -42,8 +42,8 @@ pub(crate) fn print_report(report: &EntryReport, quiet: bool) {
             println!("{header}: folder missing");
             return;
         }
-        EntryState::NoCache => {
-            println!("{header}: no cache");
+        EntryState::Missing => {
+            println!("{header}: missing from lockfile");
             return;
         }
         EntryState::Compared => {}
