@@ -8,6 +8,7 @@ use crate::cache::{self, EntryState, FileChange, Manifest};
 use crate::commands::common::select_entries;
 use crate::commands::status::print_report;
 use crate::config::{self, Config, EmbdEntry};
+use crate::filter::Filter;
 use crate::{git, paths};
 
 #[derive(clap::Args, Debug)]
@@ -176,8 +177,11 @@ fn process_entry(
         config.save(config_path)?;
     }
 
-    // Build the prospective manifest from the temp clone.
-    let new_manifest = Manifest::build_from_path(tmp.path(), new_commit.clone())?;
+    // Build the prospective manifest from the temp clone, applying the same
+    // include/exclude filter the entry was added with so filtered-out files are
+    // never re-introduced.
+    let filter = Filter::from_patterns(&entry.include, &entry.exclude)?;
+    let new_manifest = Manifest::build_from_path_filtered(tmp.path(), new_commit.clone(), &filter)?;
 
     // Load the old manifest's file list, or treat as empty for no-cache / folder-missing.
     let manifest_path = paths::cache_path(root, name);
@@ -408,8 +412,16 @@ mod tests {
 
         let new = manifest_for(&src, "new");
         let changes = apply_update(&src, &dst, &BTreeMap::new(), &new, false).unwrap();
-        assert!(changes.iter().any(|c| matches!(c, UpdateChange::Wrote(k) if k == "a.txt")));
-        assert!(changes.iter().any(|c| matches!(c, UpdateChange::Wrote(k) if k == "sub/b.txt")));
+        assert!(
+            changes
+                .iter()
+                .any(|c| matches!(c, UpdateChange::Wrote(k) if k == "a.txt"))
+        );
+        assert!(
+            changes
+                .iter()
+                .any(|c| matches!(c, UpdateChange::Wrote(k) if k == "sub/b.txt"))
+        );
         assert_eq!(fs::read_to_string(dst.join("a.txt")).unwrap(), "alpha");
         assert_eq!(fs::read_to_string(dst.join("sub/b.txt")).unwrap(), "beta");
     }
@@ -505,8 +517,14 @@ mod tests {
         let new = manifest_for(&src, "new");
 
         apply_update(&src, &dst, &old, &new, false).unwrap();
-        assert!(!dst.join("deep/sub").exists(), "empty subdir should be pruned");
-        assert!(!dst.join("deep").exists(), "empty parent should also be pruned");
+        assert!(
+            !dst.join("deep/sub").exists(),
+            "empty subdir should be pruned"
+        );
+        assert!(
+            !dst.join("deep").exists(),
+            "empty parent should also be pruned"
+        );
     }
 
     #[cfg(unix)]

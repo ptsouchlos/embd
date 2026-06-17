@@ -15,6 +15,7 @@ use tempfile::NamedTempFile;
 
 use crate::config::EmbdEntry;
 use crate::filesystem;
+use crate::filter::Filter;
 use crate::paths;
 
 const CURRENT_SCHEMA: u32 = 1;
@@ -35,8 +36,19 @@ impl Manifest {
     /// Build a manifest by hashing every regular file under `root` (excluding
     /// `.git`, never following symlinks).
     pub(crate) fn build_from_path(root: &Path, commit_hash: String) -> Result<Self> {
+        Self::build_from_path_filtered(root, commit_hash, &Filter::allow_all())
+    }
+
+    /// Like [`Manifest::build_from_path`], but only hashes files accepted by
+    /// `filter`. Used by `update` so the rebuilt manifest reflects the same
+    /// include/exclude rules `add` applied.
+    pub(crate) fn build_from_path_filtered(
+        root: &Path,
+        commit_hash: String,
+        filter: &Filter,
+    ) -> Result<Self> {
         let mut files = BTreeMap::new();
-        for relative in walk_files(root)? {
+        for relative in walk_files(root, filter)? {
             let absolute = root.join(&relative);
             let hash = hash_file(&absolute)?;
             files.insert(path_to_key(&relative), hash);
@@ -75,16 +87,22 @@ impl Manifest {
 }
 
 /// Walk a directory tree and return every regular file's path relative to
-/// `root`, sorted lexicographically. Skips `.git` directories and silently
-/// ignores symlinks (the status walker reports symlinks separately).
-fn walk_files(root: &Path) -> Result<Vec<PathBuf>> {
+/// `root`, sorted lexicographically. Skips `.git` directories, files rejected by
+/// `filter`, and silently ignores symlinks (the status walker reports symlinks
+/// separately).
+fn walk_files(root: &Path, filter: &Filter) -> Result<Vec<PathBuf>> {
     let mut out = Vec::new();
-    walk_files_inner(root, Path::new(""), &mut out)?;
+    walk_files_inner(root, Path::new(""), filter, &mut out)?;
     out.sort();
     Ok(out)
 }
 
-fn walk_files_inner(root: &Path, relative: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
+fn walk_files_inner(
+    root: &Path,
+    relative: &Path,
+    filter: &Filter,
+    out: &mut Vec<PathBuf>,
+) -> Result<()> {
     let absolute = root.join(relative);
     let read = std::fs::read_dir(&absolute)
         .with_context(|| format!("failed to read directory {}", absolute.display()))?;
@@ -102,8 +120,11 @@ fn walk_files_inner(root: &Path, relative: &Path, out: &mut Vec<PathBuf>) -> Res
             continue;
         }
         if file_type.is_dir() {
-            walk_files_inner(root, &child_relative, out)?;
+            walk_files_inner(root, &child_relative, filter, out)?;
         } else if file_type.is_file() {
+            if !filter.includes(&path_to_key(&child_relative)) {
+                continue;
+            }
             out.push(child_relative);
         }
     }
@@ -354,6 +375,8 @@ mod tests {
             commit_hash: commit.into(),
             folder: PathBuf::from(folder),
             allow_untracked,
+            include: Vec::new(),
+            exclude: Vec::new(),
         }
     }
 
@@ -537,7 +560,7 @@ mod tests {
         std::fs::write(dir.path().join("a.txt"), "a").unwrap();
         std::fs::write(dir.path().join("b/b.txt"), "b").unwrap();
 
-        let files = walk_files(dir.path()).unwrap();
+        let files = walk_files(dir.path(), &Filter::allow_all()).unwrap();
         assert_eq!(
             files,
             vec![
@@ -554,7 +577,7 @@ mod tests {
         std::fs::create_dir_all(dir.path().join(".git")).unwrap();
         std::fs::write(dir.path().join(".git/HEAD"), "x").unwrap();
         std::fs::write(dir.path().join("keep.txt"), "k").unwrap();
-        let files = walk_files(dir.path()).unwrap();
+        let files = walk_files(dir.path(), &Filter::allow_all()).unwrap();
         assert_eq!(files, vec![PathBuf::from("keep.txt")]);
     }
 
@@ -565,7 +588,7 @@ mod tests {
         let dir = tempdir().unwrap();
         std::fs::write(dir.path().join("real.txt"), "r").unwrap();
         symlink("real.txt", dir.path().join("link.txt")).unwrap();
-        let files = walk_files(dir.path()).unwrap();
+        let files = walk_files(dir.path(), &Filter::allow_all()).unwrap();
         assert_eq!(files, vec![PathBuf::from("real.txt")]);
     }
 
