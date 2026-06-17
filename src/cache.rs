@@ -58,9 +58,9 @@ impl Manifest {
     /// Save the manifest with a tmpfile-then-rename so a crash mid-write can't
     /// leave a torn file.
     pub(crate) fn save(&self, path: &Path) -> Result<()> {
-        let parent = path.parent().with_context(|| {
-            format!("manifest path {} has no parent directory", path.display())
-        })?;
+        let parent = path
+            .parent()
+            .with_context(|| format!("manifest path {} has no parent directory", path.display()))?;
         std::fs::create_dir_all(parent)
             .with_context(|| format!("failed to create directory {}", parent.display()))?;
         let content = toml::to_string_pretty(self).context("failed to serialize manifest")?;
@@ -94,9 +94,9 @@ fn walk_files_inner(root: &Path, relative: &Path, out: &mut Vec<PathBuf>) -> Res
         if filesystem::is_skipped_entry(&name) {
             continue;
         }
-        let file_type = entry.file_type().with_context(|| {
-            format!("failed to read file type of {}", entry.path().display())
-        })?;
+        let file_type = entry
+            .file_type()
+            .with_context(|| format!("failed to read file type of {}", entry.path().display()))?;
         let child_relative = relative.join(&name);
         if file_type.is_symlink() {
             continue;
@@ -113,8 +113,7 @@ fn walk_files_inner(root: &Path, relative: &Path, out: &mut Vec<PathBuf>) -> Res
 /// Hash a file's contents with SHA-256, streamed in 64 KiB chunks so multi-GiB
 /// vendored blobs don't blow up memory.
 pub(crate) fn hash_file(path: &Path) -> Result<String> {
-    let file = File::open(path)
-        .with_context(|| format!("failed to open {}", path.display()))?;
+    let file = File::open(path).with_context(|| format!("failed to open {}", path.display()))?;
     let mut reader = BufReader::new(file);
     let mut hasher = Sha256::new();
     let mut buf = [0u8; HASH_BUFFER_SIZE];
@@ -198,11 +197,7 @@ pub(crate) enum DiskEntry {
     Symlink,
 }
 
-pub(crate) fn inspect_entry<'a>(
-    root: &Path,
-    name: &'a str,
-    entry: &EmbdEntry,
-) -> EntryReport<'a> {
+pub(crate) fn inspect_entry<'a>(root: &Path, name: &'a str, entry: &EmbdEntry) -> EntryReport<'a> {
     let folder_abs = root.join(&entry.folder);
     let mut report = EntryReport {
         name,
@@ -417,7 +412,10 @@ mod tests {
         let entry = make_entry("vendor/foo", "abc123", false);
         fs::write(root.join("vendor/foo/extra.txt"), "x").unwrap();
         let report = inspect_entry(&root, &name, &entry);
-        assert_eq!(report.changes, vec![FileChange::Untracked("extra.txt".into())]);
+        assert_eq!(
+            report.changes,
+            vec![FileChange::Untracked("extra.txt".into())]
+        );
         assert!(report.has_drift());
     }
 
@@ -427,7 +425,10 @@ mod tests {
         let entry = make_entry("vendor/foo", "abc123", true);
         fs::write(root.join("vendor/foo/extra.txt"), "x").unwrap();
         let report = inspect_entry(&root, &name, &entry);
-        assert_eq!(report.changes, vec![FileChange::Untracked("extra.txt".into())]);
+        assert_eq!(
+            report.changes,
+            vec![FileChange::Untracked("extra.txt".into())]
+        );
         assert!(!report.has_drift());
     }
 
@@ -438,7 +439,10 @@ mod tests {
         fs::write(root.join("vendor/foo/a.txt"), "ALPHA").unwrap();
         fs::write(root.join("vendor/foo/extra.txt"), "x").unwrap();
         let report = inspect_entry(&root, &name, &entry);
-        assert!(report.has_drift(), "modified file must always count as drift");
+        assert!(
+            report.has_drift(),
+            "modified file must always count as drift"
+        );
     }
 
     #[test]
