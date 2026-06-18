@@ -12,8 +12,10 @@ mod git;
 mod lockfile;
 mod paths;
 
+shadow_rs::shadow!(build);
+
 #[derive(Parser, Debug)]
-#[command(version, about, long_about = None)]
+#[command(version = build::CLAP_LONG_VERSION, about = "A tool for embedding a git repo into another.", long_about = None)]
 enum Command {
     #[command(about, long_about = "Add a new submodule/embed.")]
     Add(AddArgs),
