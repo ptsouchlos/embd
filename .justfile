@@ -23,3 +23,8 @@ lint:
 [group('dev')]
 format:
     cargo fmt --all
+
+[doc('Install embd locally')]
+[group('dev')]
+install:
+    cargo install --path .
