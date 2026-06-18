@@ -2,7 +2,7 @@
 
 `embd` is a CLI tool that serves as an alternative to `git subtree` and `git submodule`. It's heavily inspired by [beman-submodule](https://github.com/bemanproject/beman-submodule).
 
-See the [design documentation](./docs/design.md) for more details on some of the differences between `embd` and `beman-submodule` as well as why those decisions we made.
+See the [design documentation](./docs/design.md) for more details on some of the differences between `embd` and `beman-submodule` as well as why those decisions were made.
 
 ## Installation
 
