@@ -1,5 +1,7 @@
-set windows-shell := ["pwsh.exe", "-NoLogo", "-Command"]
-set shell := ["bash", "-c"]
+# Import shared just recipes
+import "infra/rust/just/shells.just"
+import "infra/rust/just/clippy.just"
+import "infra/rust/just/format.just"
 
 default:
     @just -l
@@ -13,16 +15,6 @@ build config="debug":
 [group('dev')]
 test config="debug":
     cargo test --workspace --all-targets {{ if config == "release" { "--release" } else { "" } }} -- --include-ignored
-
-[doc('Run clippy')]
-[group('dev')]
-lint:
-    cargo clippy --all --tests -- -D warnings
-
-[doc('Format all Rust code')]
-[group('dev')]
-format:
-    cargo fmt --all
 
 [doc('Install embd locally')]
 [group('dev')]
