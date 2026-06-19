@@ -16,11 +16,11 @@ The general idea is to pull the dependant repository as source into the parent r
 
 ### Commands
 
-| Command  |                 Description                 |                                                        Options                                                         |
-| :------: | :-----------------------------------------: | :--------------------------------------------------------------------------------------------------------------------: |
-|  `add`   |   Add a new embedded repo to the project.   | `path`: Specify what subdirectory to put embed in. \n `allow-untracked`: Allow untracked files in the embed directory. |
-| `update` | Update all embeds to match the config file. |                                                                                                                        |
-| `status` |       Show the status of all embeds.        |                                                                                                                        |
+| Command  |                 Description                 |                                                                                                                                                 Options                                                                                                                                                 |
+| :------: | :-----------------------------------------: | :-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------: |
+|  `add`   |   Add a new embedded repo to the project.   | `folder`: Specify what subdirectory to put embed in. \n `allow-untracked`: Allow untracked files in the embed directory. \n `link`: The link to the project to include \n `rev`: Specify the commit,tag or branch to pull \n `include`: Glob patterns to include \n `exclude`: Glob patterns to exclude |
+| `update` | Update all embeds to match the config file. |                                          `rev`: Specify the commit, tag or branch to advance to \n `force`: Overwrite any local modification \n `overwrite`: Delete all untracked files (requries `force`) \n `quiet`: Print summaries, not each file updates.                                          |
+| `status` |       Show the status of all embeds.        |                                                                                                                           `quiet`: Should summaries per embed, not per file.                                                                                                                            |
 
 ### Config File
 
