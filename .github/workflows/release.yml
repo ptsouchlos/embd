@@ -113,3 +113,4 @@ jobs:
           major="${GITHUB_REF_NAME%%.*}" # v0.1.0 -> v0
           git tag -f "$major" # points at the checked-out tag commit (HEAD)
           git push -f origin "$major"
+|||||||
