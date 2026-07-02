@@ -1,0 +1,80 @@
+name: 'embd'
+description: 'Check embedded-repo drift in CI with `embd status`'
+author: 'ptsouchlos'
+branding:
+  icon: 'git-merge'
+  color: 'purple'
+
+inputs:
+  args:
+    description: 'Arguments passed to embd'
+    required: false
+    default: 'status'
+  version:
+    description: 'embd release tag to use (e.g. v0.1.0). Defaults to the action ref, falling back to the latest release.'
+    required: false
+    default: ''
+  working-directory:
+    description: 'Directory to run embd in'
+    required: false
+    default: '.'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Download embd
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        INPUT_VERSION: ${{ inputs.version }}
+        ACTION_REF: ${{ github.action_ref }}
+      run: |
+        set -euo pipefail
+        REPO="ptsouchlos/embd"
+
+        VER="${INPUT_VERSION}"
+        if [ -z "$VER" ]; then
+          REF="${ACTION_REF:-}"
+          if [[ "$REF" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-.*)?$ ]]; then
+            # exact version tag, e.g. v0.1.0
+            VER="$REF"
+          elif [[ "$REF" =~ ^v[0-9]+$ ]]; then
+            # moving major tag, e.g. v1 -> newest v1.* release (list is newest-first)
+            VER="$(gh release list --repo "$REPO" --json tagName \
+              --jq "map(.tagName) | map(select(startswith(\"${REF}.\"))) | first // \"\"")"
+          fi
+          if [ -z "$VER" ] || [ "$VER" = "null" ]; then
+            # branch/SHA or unresolved -> latest release
+            VER="$(gh release view --repo "$REPO" --json tagName --jq .tagName)"
+          fi
+        fi
+        echo "Using embd release: $VER"
+
+        case "${RUNNER_OS}-${RUNNER_ARCH}" in
+          Linux-X64)    TRIPLE=x86_64-unknown-linux-musl;  EXT=tar.gz ;;
+          Linux-ARM64)  TRIPLE=aarch64-unknown-linux-musl; EXT=tar.gz ;;
+          macOS-X64)    TRIPLE=x86_64-apple-darwin;        EXT=tar.gz ;;
+          macOS-ARM64)  TRIPLE=aarch64-apple-darwin;       EXT=tar.gz ;;
+          Windows-X64)  TRIPLE=x86_64-pc-windows-msvc;     EXT=zip ;;
+          *) echo "::error::Unsupported platform ${RUNNER_OS}-${RUNNER_ARCH}" >&2; exit 1 ;;
+        esac
+
+        ASSET="embd-${TRIPLE}.${EXT}"
+        URL="https://github.com/${REPO}/releases/download/${VER}/${ASSET}"
+        DEST="${RUNNER_TEMP}/embd-bin"
+        mkdir -p "$DEST"
+        echo "Downloading $URL"
+        curl -fsSL "$URL" -o "${RUNNER_TEMP}/${ASSET}"
+        if [ "$EXT" = "zip" ]; then
+          # zip assets are Windows-only, where 7z is always available (unzip may not be)
+          7z x -y -o"$DEST" "${RUNNER_TEMP}/${ASSET}" >/dev/null
+        else
+          tar -xzf "${RUNNER_TEMP}/${ASSET}" -C "$DEST"
+        fi
+        chmod +x "${DEST}/embd" 2>/dev/null || true
+        echo "$DEST" >> "$GITHUB_PATH"
+
+    - name: Run embd
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: embd ${{ inputs.args }}
