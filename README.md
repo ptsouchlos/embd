@@ -6,10 +6,10 @@ See the [design documentation](./docs/design.md) for more details on some of the
 
 ## Installation
 
-Install the latest published release from [crates.io](https://crates.io/crates/embd):
+Install the latest published release from [crates.io](https://crates.io/crates/embd-cli):
 
 ```bash
-cargo install embd
+cargo install embd-cli
 ```
 
 To build and install from a local checkout instead, use [just](https://github.com/casey/just) or `cargo`:
