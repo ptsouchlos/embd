@@ -1,0 +1,114 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+      - 'v[0-9]+.[0-9]+.[0-9]+-*'
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check-version:
+    name: Verify tag matches Cargo.toml
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v6
+      - name: Compare tag and crate version
+        shell: bash
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          crate="$(grep -m1 '^version = ' Cargo.toml | sed -E 's/.*"(.*)".*/\1/')"
+          echo "tag=$tag crate=$crate"
+          if [ "$tag" != "$crate" ]; then
+            echo "::error::Tag ${GITHUB_REF_NAME} (${tag}) does not match Cargo.toml version ${crate}. Bump Cargo.toml before tagging." >&2
+            exit 1
+          fi
+
+  build:
+    name: Build ${{ matrix.target }}
+    needs: check-version
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-musl
+            runner: ubuntu-22.04
+            archive: tar.gz
+            musl: true
+          - target: aarch64-unknown-linux-musl
+            runner: ubuntu-22.04-arm
+            archive: tar.gz
+            musl: true
+          - target: x86_64-apple-darwin
+            runner: macos-14
+            archive: tar.gz
+          - target: aarch64-apple-darwin
+            runner: macos-14
+            archive: tar.gz
+          - target: x86_64-pc-windows-msvc
+            runner: windows-2025
+            archive: zip
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0 # full history + tags so shadow-rs builds correct version metadata
+      - name: Set up Rust
+        run: |
+          rustup default stable
+          rustup target add ${{ matrix.target }}
+      - name: Install musl tools
+        if: matrix.musl
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }}
+      - name: Package (tar.gz)
+        if: matrix.archive == 'tar.gz'
+        shell: bash
+        run: tar -C target/${{ matrix.target }}/release -czf embd-${{ matrix.target }}.tar.gz embd
+      - name: Package (zip)
+        if: matrix.archive == 'zip'
+        shell: bash
+        run: |
+          cd target/${{ matrix.target }}/release
+          7z a "${GITHUB_WORKSPACE}/embd-${{ matrix.target }}.zip" embd.exe
+      - name: Upload to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: embd-${{ matrix.target }}.*
+          prerelease: ${{ contains(github.ref_name, '-') }}
+
+  publish-crate:
+    name: Publish to crates.io
+    needs: check-version
+    if: ${{ !contains(github.ref_name, '-') }} # skip prereleases
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0 # shadow-rs reads git metadata at build time
+      - name: Set up Rust
+        run: rustup default stable
+      # If the verify build fails because the packaged tarball has no .git for
+      # shadow-rs, add `--no-verify` (the build job above already validates a real build).
+      - name: Publish
+        run: cargo publish --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+  tag-major:
+    name: Move major tag
+    needs: build
+    if: ${{ !contains(github.ref_name, '-') }} # skip prereleases
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v6
+      - name: Repoint major tag to this release
+        shell: bash
+        run: |
+          major="${GITHUB_REF_NAME%%.*}" # v0.1.0 -> v0
+          git tag -f "$major" # points at the checked-out tag commit (HEAD)
+          git push -f origin "$major"

@@ -6,7 +6,13 @@ See the [design documentation](./docs/design.md) for more details on some of the
 
 ## Installation
 
-Since `embd` is still under heavy development while I work towards a first release, only local installs are currently supported. The easiest way to do this is with [just](https://github.com/casey/just) or `cargo` with one of the following commands:
+Install the latest published release from [crates.io](https://crates.io/crates/embd):
+
+```bash
+cargo install embd
+```
+
+To build and install from a local checkout instead, use [just](https://github.com/casey/just) or `cargo`:
 
 ```bash
 # with just
