@@ -3,8 +3,8 @@ name: Release
 on:
   push:
     tags:
-      - 'v[0-9]+.[0-9]+.[0-9]+'
-      - 'v[0-9]+.[0-9]+.[0-9]+-*'
+      - "v[0-9]+.[0-9]+.[0-9]+"
+      - "v[0-9]+.[0-9]+.[0-9]+-*"
 
 permissions:
   contents: write
@@ -113,4 +113,3 @@ jobs:
           major="${GITHUB_REF_NAME%%.*}" # v0.1.0 -> v0
           git tag -f "$major" # points at the checked-out tag commit (HEAD)
           git push -f origin "$major"
-|||||||
