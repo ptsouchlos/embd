@@ -22,6 +22,7 @@ jobs:
         shell: bash
         run: |
           tag="${GITHUB_REF_NAME#v}"
+          tag="${tag%%-*}" # strip prerelease suffix, e.g. 0.1.0-rc.1 -> 0.1.0
           crate="$(grep -m1 '^version = ' Cargo.toml | sed -E 's/.*"(.*)".*/\1/')"
           echo "tag=$tag crate=$crate"
           if [ "$tag" != "$crate" ]; then
