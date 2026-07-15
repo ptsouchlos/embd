@@ -12,7 +12,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, ubuntu-24.04-arm, macos-13, macos-latest, windows-latest]
+        # macOS Intel (X64) hosted runners were discontinued (macos-13 retired
+        # Dec 2025); macos-latest is Apple Silicon only, so the macOS-X64 leg
+        # of action.yml's platform case statement currently has no hosted
+        # runner to exercise it.
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest, windows-latest]
     steps:
       - uses: actions/checkout@v7
       - name: Run embd action
