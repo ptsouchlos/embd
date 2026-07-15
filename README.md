@@ -79,13 +79,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: ptsouchlos/embd@v1 # tracks the latest v1.x release; use @v0.1.0 to pin exactly
+      - uses: ptsouchlos/embd@v0 # tracks the latest stable v0.x release; use @v0.1.0 to pin exactly
 ```
 
 The `args` input overrides the command (default `status`), so you can scope the check to specific embeds or run quietly:
 
 ```yaml
-      - uses: ptsouchlos/embd@v1
+      - uses: ptsouchlos/embd@v0
         with:
           args: status --quiet infra
 ```
