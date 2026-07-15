@@ -39,9 +39,9 @@ runs:
             # exact version tag, e.g. v0.1.0
             VER="$REF"
           elif [[ "$REF" =~ ^v[0-9]+$ ]]; then
-            # moving major tag, e.g. v1 -> newest v1.* release (list is newest-first)
-            VER="$(gh release list --repo "$REPO" --json tagName \
-              --jq "map(.tagName) | map(select(startswith(\"${REF}.\"))) | first // \"\"")"
+            # moving major tag, e.g. v1 -> newest non-prerelease v1.* release (list is newest-first)
+            VER="$(gh release list --repo "$REPO" --json tagName,isPrerelease \
+              --jq "map(select(.isPrerelease | not)) | map(.tagName) | map(select(startswith(\"${REF}.\"))) | first // \"\"")"
           fi
           if [ -z "$VER" ] || [ "$VER" = "null" ]; then
             # branch/SHA or unresolved -> latest release
@@ -65,6 +65,8 @@ runs:
         mkdir -p "$DEST"
         echo "Downloading $URL"
         curl -fsSL "$URL" -o "${RUNNER_TEMP}/${ASSET}"
+        curl -fsSL "${URL}.sha256" -o "${RUNNER_TEMP}/${ASSET}.sha256"
+        ( cd "${RUNNER_TEMP}" && sha256sum -c "${ASSET}.sha256" )
         if [ "$EXT" = "zip" ]; then
           # zip assets are Windows-only, where 7z is always available (unzip may not be)
           7z x -y -o"$DEST" "${RUNNER_TEMP}/${ASSET}" >/dev/null
@@ -77,4 +79,6 @@ runs:
     - name: Run embd
       shell: bash
       working-directory: ${{ inputs.working-directory }}
-      run: embd ${{ inputs.args }}
+      env:
+        INPUT_ARGS: ${{ inputs.args }}
+      run: embd $INPUT_ARGS
