@@ -2,6 +2,8 @@ name: Test Action
 
 on:
   workflow_dispatch:
+  push:
+    branches: [feat/gh-action] # TODO: remove once verified; workflow_dispatch needs this on main to be API-dispatchable
 
 jobs:
   smoke-test:
