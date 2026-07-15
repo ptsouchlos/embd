@@ -78,6 +78,9 @@ jobs:
         run: |
           cd target/${{ matrix.target }}/release
           7z a "${GITHUB_WORKSPACE}/embd-${{ matrix.target }}.zip" embd.exe
+      - name: Checksum
+        shell: bash
+        run: sha256sum "embd-${{ matrix.target }}.${{ matrix.archive }}" > "embd-${{ matrix.target }}.${{ matrix.archive }}.sha256"
       - name: Upload to release
         uses: softprops/action-gh-release@v3
         with:
