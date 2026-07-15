@@ -46,11 +46,8 @@ jobs:
             runner: ubuntu-22.04-arm
             archive: tar.gz
             musl: true
-          - target: x86_64-apple-darwin
-            runner: macos-14
-            archive: tar.gz
           - target: aarch64-apple-darwin
-            runner: macos-14
+            runner: macos-26 # Apple has deprecated Intel; only build for Apple Silicon, matching build_and_test.yml's runner
             archive: tar.gz
           - target: x86_64-pc-windows-msvc
             runner: windows-2025
