@@ -47,7 +47,7 @@ jobs:
             archive: tar.gz
             musl: true
           - target: aarch64-apple-darwin
-            runner: macos-26 # Apple has deprecated Intel; only build for Apple Silicon, matching build_and_test.yml's runner
+            runner: macos-26
             archive: tar.gz
           - target: x86_64-pc-windows-msvc
             runner: windows-2025
