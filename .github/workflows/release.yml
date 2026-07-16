@@ -46,11 +46,8 @@ jobs:
             runner: ubuntu-22.04-arm
             archive: tar.gz
             musl: true
-          - target: x86_64-apple-darwin
-            runner: macos-14
-            archive: tar.gz
           - target: aarch64-apple-darwin
-            runner: macos-14
+            runner: macos-26
             archive: tar.gz
           - target: x86_64-pc-windows-msvc
             runner: windows-2025
@@ -78,6 +75,9 @@ jobs:
         run: |
           cd target/${{ matrix.target }}/release
           7z a "${GITHUB_WORKSPACE}/embd-${{ matrix.target }}.zip" embd.exe
+      - name: Checksum
+        shell: bash
+        run: sha256sum "embd-${{ matrix.target }}.${{ matrix.archive }}" > "embd-${{ matrix.target }}.${{ matrix.archive }}.sha256"
       - name: Upload to release
         uses: softprops/action-gh-release@v3
         with:
