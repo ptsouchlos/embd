@@ -1,5 +1,6 @@
 use anyhow::Result;
 
+use crate::color;
 use crate::commands::common::select_entries;
 use crate::config;
 use crate::lockfile::{self, EntryReport, EntryState, FileChange, Lockfile};
@@ -35,26 +36,28 @@ pub(crate) fn execute(args: StatusArgs) -> Result<()> {
 }
 
 pub(crate) fn print_report(report: &EntryReport, quiet: bool) {
-    let header = format!("{} ({})", report.name, report.folder.display());
+    use anstream::println;
+
+    let header = color::header(&format!("{} ({})", report.name, report.folder.display()));
 
     match report.state {
         EntryState::FolderMissing => {
-            println!("{header}: folder missing");
+            println!("{header}: {}", color::bad("folder missing"));
             return;
         }
         EntryState::Missing => {
-            println!("{header}: missing from lock file");
+            println!("{header}: {}", color::bad("missing from lock file"));
             return;
         }
         EntryState::Compared => {}
     }
 
     let summary = if let Some((local, wanted)) = &report.stale {
-        format!("stale (folder at {local}, config wants {wanted})")
+        color::warn(&format!("stale (folder at {local}, config wants {wanted})"))
     } else if report.changes.is_empty() {
-        "clean".to_string()
+        color::ok("clean")
     } else {
-        "drift".to_string()
+        color::warn("drift")
     };
     println!("{header}: {summary}");
 
@@ -62,17 +65,18 @@ pub(crate) fn print_report(report: &EntryReport, quiet: bool) {
         return;
     }
     for change in &report.changes {
+        let mrkr = change.as_marker();
         match change {
-            FileChange::Modified(p) => println!("  M  {p}"),
-            FileChange::Deleted(p) => println!("  D  {p}"),
+            FileChange::Modified(p) => println!("  {}  {p}", color::marker(mrkr)),
+            FileChange::Deleted(p) => println!("  {}  {p}", color::marker(mrkr)),
             FileChange::Untracked(p) => {
                 if report.allow_untracked {
-                    println!("  ?  {p} (untracked, allowed)");
+                    println!("  {}  {p} (untracked, allowed)", color::marker(mrkr));
                 } else {
-                    println!("  ?  {p} (untracked)");
+                    println!("  {}  {p} (untracked)", color::marker(mrkr));
                 }
             }
-            FileChange::Symlink(p) => println!("  L  {p} (symlink)"),
+            FileChange::Symlink(p) => println!("  {}  {p} (symlink)", color::marker(mrkr)),
         }
     }
 }
