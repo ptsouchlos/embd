@@ -1,0 +1,6 @@
+- id: embd-status
+  name: embd status
+  description: Check for embedded file drift with `embd status`.
+  entry: embd status
+  language: rust
+  pass_filenames: false

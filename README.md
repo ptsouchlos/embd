@@ -85,9 +85,21 @@ jobs:
 The `args` input overrides the command (default `status`), so you can scope the check to specific embeds or run quietly:
 
 ```yaml
-      - uses: ptsouchlos/embd@v0
-        with:
-          args: status --quiet infra
+- uses: ptsouchlos/embd@v0
+  with:
+    args: status --quiet infra
+```
+
+## Use as a pre-commit hook
+
+You can run `embd status` via [pre-commit](https://pre-commit.com/) or [`prek`](https://github.com/j178/prek) by adding this to your `.pre-commit-config.yaml`:
+
+```yaml
+repos:
+  - repo: https://github.com/ptsouchlos/embd
+    rev: v0.1.2 # pin to a released tag
+    hooks:
+      - id: embd-status
 ```
 
 ## Credits
