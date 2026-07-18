@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use tempfile::tempdir;
 
+use crate::color;
 use crate::commands::common::select_entries;
 use crate::commands::status::print_report;
 use crate::config::{self, Config, EmbdEntry};
@@ -111,6 +112,17 @@ enum UpdateChange {
     Wrote(String),
     Deleted(String),
     Removed(String), // --overwrite swept this
+}
+
+impl UpdateChange {
+    /// Helper to convert [`UpdateChange`] to a marker (char).
+    pub(crate) fn as_marker(&self) -> char {
+        match self {
+            Self::Wrote(_) => 'W',
+            Self::Deleted(_) => 'D',
+            Self::Removed(_) => 'X',
+        }
+    }
 }
 
 #[allow(clippy::too_many_arguments)]

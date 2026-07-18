@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tempfile::NamedTempFile;
 
+use crate::color;
 use crate::config::EmbdEntry;
 use crate::filesystem;
 use crate::filter::Filter;
@@ -271,6 +272,18 @@ pub(crate) enum FileChange {
     Deleted(String),
     Untracked(String),
     Symlink(String),
+}
+
+impl FileChange {
+    /// Helper to convert [`FileChange`] to a marker (char).
+    pub(crate) fn as_marker(&self) -> char {
+        match self {
+            Self::Modified(_) => 'M',
+            Self::Deleted(_) => 'D',
+            Self::Untracked(_) => '?',
+            Self::Symlink(_) => 'L',
+        }
+    }
 }
 
 /// Aggregate report for a single entry. `Compared`, `FolderMissing`, and
