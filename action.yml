@@ -1,5 +1,5 @@
-name: 'embd'
-description: 'Check embedded-repo drift in CI with `embd status`'
+name: 'embd-check'
+description: 'Check for embedded file drift in CI with `embd status`'
 author: 'ptsouchlos'
 branding:
   icon: 'git-merge'
