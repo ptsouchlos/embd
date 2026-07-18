@@ -12,8 +12,10 @@ name = "embd"
 path = "src/main.rs"
 
 [dependencies]
+anstream = "1.0.0"
 anyhow = "1"
 clap = { version = "4.5.57", features = ["derive"] }
+owo-colors = "4.3"
 serde = { version = "1", features = ["derive"] }
 toml = "1.1"
 tempfile = "3"

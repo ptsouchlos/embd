@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use tempfile::tempdir;
 
+use crate::color;
 use crate::config::{self, EmbdEntry};
 use crate::filter::Filter;
 use crate::lockfile::{self, LockEntry};
@@ -144,16 +145,20 @@ pub(crate) fn execute(args: AddArgs) -> Result<()> {
 /// passed --allow-untracked we don't touch it (we can't tell our files apart
 /// from theirs); otherwise it was empty so we can safely remove it.
 fn rollback(folder: &Path, folder_existed: bool, allow_untracked: bool) {
+    use anstream::eprintln;
+
     if allow_untracked && folder_existed {
         eprintln!(
-            "warning: leaving partially-copied files in '{}' (used --allow-untracked)",
+            "{} leaving partially-copied files in '{}' (used --allow-untracked)",
+            color::warning_label(),
             folder.display()
         );
         return;
     }
     if let Err(e) = std::fs::remove_dir_all(folder) {
         eprintln!(
-            "warning: failed to clean up '{}' after error: {}",
+            "{} failed to clean up '{}' after error: {}",
+            color::warning_label(),
             folder.display(),
             e
         );

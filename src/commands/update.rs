@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use tempfile::tempdir;
 
+use crate::color;
 use crate::commands::common::select_entries;
 use crate::commands::status::print_report;
 use crate::config::{self, Config, EmbdEntry};
@@ -71,7 +72,7 @@ pub(crate) fn execute(args: UpdateArgs) -> Result<()> {
                 }
             }
             Err(e) => {
-                eprintln!("error: {name}: {e:#}");
+                anstream::eprintln!("{} {name}: {e:#}", color::error_label());
                 any_failed = true;
             }
         }
@@ -111,6 +112,17 @@ enum UpdateChange {
     Wrote(String),
     Deleted(String),
     Removed(String), // --overwrite swept this
+}
+
+impl UpdateChange {
+    /// Helper to convert [`UpdateChange`] to a marker (char).
+    pub(crate) fn as_marker(&self) -> char {
+        match self {
+            Self::Wrote(_) => 'W',
+            Self::Deleted(_) => 'D',
+            Self::Removed(_) => 'X',
+        }
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -357,14 +369,21 @@ fn short(commit: &str) -> &str {
 }
 
 fn print_outcome(name: &str, entry: &EmbdEntry, outcome: &Outcome, quiet: bool) {
-    let header = format!("{name} ({})", entry.folder.display());
+    use anstream::{eprintln, println};
+
+    let header = color::header(&format!("{name} ({})", entry.folder.display()));
     match outcome {
-        Outcome::UpToDate => println!("{header}: up to date"),
-        Outcome::SkippedNoLockfile => println!("{header}: no lock file (use --force)"),
+        Outcome::UpToDate => println!("{header}: {}", color::ok("up to date")),
+        Outcome::SkippedNoLockfile => {
+            println!("{header}: {}", color::bad("no lock file (use --force)"))
+        }
         Outcome::SkippedDrift => {
             // The detailed diff was already printed via print_report. Add a trailing
             // hint so the user knows what to do.
-            eprintln!("error: re-run with --force to overwrite local modifications");
+            eprintln!(
+                "{} re-run with --force to overwrite local modifications",
+                color::error_label()
+            );
         }
         Outcome::Updated {
             old_commit,
@@ -374,21 +393,23 @@ fn print_outcome(name: &str, entry: &EmbdEntry, outcome: &Outcome, quiet: bool) 
             let n = changes.len();
             let plural = if n == 1 { "change" } else { "changes" };
             if old_commit == new_commit {
-                println!("{header}: updated, {n} {plural}");
+                println!("{header}: {}, {n} {plural}", color::ok("updated"));
             } else {
                 println!(
-                    "{header}: updated {} -> {}, {n} {plural}",
-                    short(old_commit),
-                    short(new_commit)
+                    "{header}: {} {} -> {}, {n} {plural}",
+                    color::ok("updated"),
+                    color::dim(short(old_commit)),
+                    color::dim(short(new_commit))
                 );
             }
             if !quiet {
-                for c in changes {
-                    match c {
-                        UpdateChange::Wrote(p) => println!("  W  {p}"),
-                        UpdateChange::Deleted(p) => println!("  D  {p}"),
+                for change in changes {
+                    let mrkr = change.as_marker();
+                    match change {
+                        UpdateChange::Wrote(p) => println!("  {}  {p}", color::marker(mrkr)),
+                        UpdateChange::Deleted(p) => println!("  {}  {p}", color::marker(mrkr)),
                         UpdateChange::Removed(p) => {
-                            println!("  X  {p} (untracked, removed)")
+                            println!("  {}  {p} (untracked, removed)", color::marker(mrkr))
                         }
                     }
                 }
