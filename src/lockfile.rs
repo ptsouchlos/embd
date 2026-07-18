@@ -372,7 +372,12 @@ pub(crate) fn inspect_entry<'a>(
     let on_disk = match scan_folder(&folder_abs) {
         Ok(map) => map,
         Err(e) => {
-            eprintln!("warning: failed to scan folder for '{}': {}", name, e);
+            anstream::eprintln!(
+                "{} failed to scan folder for '{}': {}",
+                color::warning_label(),
+                name,
+                e
+            );
             report.state = EntryState::FolderMissing;
             return report;
         }
