@@ -4,6 +4,7 @@ use clap::Parser;
 use crate::commands::add::AddArgs;
 use crate::commands::status::StatusArgs;
 use crate::commands::update::UpdateArgs;
+mod color;
 mod commands;
 mod config;
 mod filesystem;
@@ -32,11 +33,15 @@ enum Command {
 struct Options {
     #[clap(subcommand)]
     command: Command,
+    /// Controls colored output.
+    #[clap(long, global = true, value_enum, default_value_t = color::ColorMode::Auto)]
+    color: color::ColorMode,
 }
 
 /// Main function that runs the CLI. It parses the arguments and dispatches to the appropriate command handler.
 fn run() -> Result<()> {
     let opts = Options::parse();
+    opts.color.apply();
     match opts.command {
         Command::Add(add_args) => commands::add::execute(add_args)?,
         Command::Status(status_args) => commands::status::execute(status_args)?,
