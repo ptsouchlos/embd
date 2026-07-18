@@ -52,7 +52,7 @@ fn run() -> Result<()> {
 
 fn main() {
     if let Err(e) = run() {
-        eprintln!("error: {e:#}");
+        anstream::eprintln!("{} {e:#}", color::error_label());
         std::process::exit(1);
     }
 }
