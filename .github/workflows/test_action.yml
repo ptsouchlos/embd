@@ -2,8 +2,10 @@ name: Test Action
 
 on:
   workflow_dispatch:
+  pull_request:
+    branches: [main]
   push:
-    branches: [feat/gh-action] # TODO: remove once verified; workflow_dispatch needs this on main to be API-dispatchable
+    branches: [main]
 
 jobs:
   smoke-test:
@@ -12,10 +14,6 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # macOS Intel (X64) hosted runners were discontinued (macos-13 retired
-        # Dec 2025); macos-latest is Apple Silicon only, so the macOS-X64 leg
-        # of action.yml's platform case statement currently has no hosted
-        # runner to exercise it.
         os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest, windows-latest]
     steps:
       - uses: actions/checkout@v7
