@@ -65,7 +65,30 @@ To check for deviations, run:
 embd status
 ```
 
-This will print out any files that differ from the tracked revision of the pulled files. This is mostly useful for ensuring that files that are part of an "embed" are not inadvertently edited. This check can be used in CI workflows to ensure that such edits do not occur.
+This will print out any files that differ from the tracked revision of the pulled files. This is mostly useful for ensuring that files that are part of an "embed" are not inadvertently edited. This check can be used in [CI workflows](#use-in-ci-github-action) to ensure that such edits do not occur.
+
+## Use in CI (GitHub Action)
+
+You can run `embd status` in CI with the bundled GitHub Action. It downloads a prebuilt `embd` binary for the runner and runs `status`, failing the job if any embed has drifted:
+
+```yaml
+name: embd
+on: [push, pull_request]
+jobs:
+  embd:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ptsouchlos/embd@v0 # tracks the latest stable v0.x release; use @v0.1.0 to pin exactly
+```
+
+The `args` input overrides the command (default `status`), so you can scope the check to specific embeds or run quietly:
+
+```yaml
+      - uses: ptsouchlos/embd@v0
+        with:
+          args: status --quiet infra
+```
 
 ## Credits
 
