@@ -78,7 +78,7 @@ jobs:
   embd:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: ptsouchlos/embd@v0 # tracks the latest stable v0.x release; use @v0.1.0 to pin exactly
 ```
 
