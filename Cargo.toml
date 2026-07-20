@@ -1,6 +1,6 @@
 [package]
 name = "embd-cli"
-version = "0.1.2"
+version = "0.2.0"
 edition = "2024"
 description = "A CLI tool for embedding a git repo into another, an alternative to git subtree and git submodule."
 license = "MIT"
