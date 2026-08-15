@@ -1,5 +1,5 @@
 # Import shared just recipes
-import "infra/rust/just/shells.just"
+import "infra/just/shells.just"
 import "infra/rust/just/clippy.just"
 import "infra/rust/just/format.just"
 
