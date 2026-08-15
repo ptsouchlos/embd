@@ -4,9 +4,8 @@ use anyhow::{Context, Result, bail};
 use tempfile::tempdir;
 
 use crate::color;
-use crate::config::{self, EmbdEntry};
+use crate::config::{self, EmbdEntry, FileLocks, Metadata};
 use crate::filter::Filter;
-use crate::lockfile::{self, LockEntry};
 use crate::{filesystem, git, paths};
 
 /// Input arguments for the `add` command.
@@ -101,22 +100,23 @@ pub(crate) fn execute(args: AddArgs) -> Result<()> {
     // so we never leave on-disk state without a matching config entry.
     filesystem::copy_dir(tmp_dir.path(), &folder_abs, &filter)?;
 
-    let lock_path = paths::lock_path(&root);
-
     let result = (|| -> Result<()> {
-        let lock_entry = LockEntry::build_from_path(&folder_abs, commit_hash.clone())?;
-        let mut lock = lockfile::Lockfile::load_or_default(&lock_path)?;
-        lock.upsert(repo_name.clone(), lock_entry);
-        lock.save(&lock_path)?;
+        // Hash the destination folder as-copied (not just what the filter
+        // allowed) so a pre-existing --allow-untracked folder's contents are
+        // reflected too, matching what `copy_dir` actually left on disk.
+        let files = FileLocks::build_from_path(&folder_abs)?;
         config.insert(
             repo_name.clone(),
             EmbdEntry {
-                remote: link,
-                commit_hash,
-                folder: folder_rel,
-                allow_untracked: args.allow_untracked,
-                include,
-                exclude,
+                metadata: Metadata {
+                    remote: link,
+                    commit_hash,
+                    folder: folder_rel,
+                    allow_untracked: args.allow_untracked,
+                    include,
+                    exclude,
+                },
+                files,
             },
         )?;
         config.save(&config_path)?;
@@ -124,15 +124,10 @@ pub(crate) fn execute(args: AddArgs) -> Result<()> {
     })();
 
     if let Err(e) = result {
-        // If there was an error, try to rollback to the previous state.
+        // If there was an error, try to rollback to the previous state. Nothing
+        // is written to config.toml unless the whole closure above succeeds, so
+        // there's no separate on-disk manifest entry to clean up here.
         rollback(&folder_abs, folder_existed, args.allow_untracked);
-        // Drop the entry we may have written to the lock file, leaving any other
-        // entries untouched.
-        if let Ok(mut lock) = lockfile::Lockfile::load(&lock_path)
-            && lock.remove(&repo_name).is_some()
-        {
-            let _ = lock.save(&lock_path);
-        }
         // Propagate the error up to the caller
         return Err(e);
     }

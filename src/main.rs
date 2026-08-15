@@ -10,7 +10,6 @@ mod config;
 mod filesystem;
 mod filter;
 mod git;
-mod lockfile;
 mod paths;
 
 shadow_rs::shadow!(build);

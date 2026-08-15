@@ -2,8 +2,7 @@ use anyhow::Result;
 
 use crate::color;
 use crate::commands::common::select_entries;
-use crate::config;
-use crate::lockfile::{self, EntryReport, EntryState, FileChange, Lockfile};
+use crate::config::{self, EntryReport, EntryState, FileChange};
 use crate::paths;
 
 #[derive(clap::Args, Debug)]
@@ -19,12 +18,11 @@ pub(crate) fn execute(args: StatusArgs) -> Result<()> {
     let root = paths::find_git_root()?;
     let config_path = paths::config_path(&root);
     let config = config::load_or_default(&config_path)?;
-    let lock = Lockfile::load_or_default(&paths::lock_path(&root))?;
     let selected = select_entries(&config, &args.names)?;
 
     let mut any_drift = false;
     for (name, entry) in selected {
-        let report = lockfile::inspect_entry(&root, name, entry, lock.get(name));
+        let report = config::inspect_entry(&root, name, entry);
         any_drift |= report.has_drift();
         print_report(&report, args.quiet);
     }
@@ -45,16 +43,10 @@ pub(crate) fn print_report(report: &EntryReport, quiet: bool) {
             println!("{header}: {}", color::bad("folder missing"));
             return;
         }
-        EntryState::Missing => {
-            println!("{header}: {}", color::bad("missing from lock file"));
-            return;
-        }
         EntryState::Compared => {}
     }
 
-    let summary = if let Some((local, wanted)) = &report.stale {
-        color::warn(&format!("stale (folder at {local}, config wants {wanted})"))
-    } else if report.changes.is_empty() {
+    let summary = if report.changes.is_empty() {
         color::ok("clean")
     } else {
         color::warn("drift")
