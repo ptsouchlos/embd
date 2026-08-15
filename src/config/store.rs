@@ -1,0 +1,353 @@
+//! Contains logic for storing and loading the configuration file used by `embd`.
+
+use std::collections::BTreeMap;
+use std::io::Write;
+use std::path::Path;
+
+use anyhow::{Context, Result, bail};
+use serde::{Deserialize, Serialize};
+use tempfile::NamedTempFile;
+
+use super::EmbdEntry;
+
+/// Represents a configuration for `embd` for a single project/directory.
+/// This does not represent a global configuration for the CLI on a given system.
+#[derive(Debug, Default, Serialize, Deserialize)]
+pub struct Config(BTreeMap<String, EmbdEntry>);
+
+impl Config {
+    /// Load the configuration from a given path.
+    ///
+    /// # Arguments
+    /// - `path`: The full path to load the file from.
+    ///
+    /// # Returns
+    /// The loaded configuration object, or an error if it failed.
+    pub fn load(path: &Path) -> Result<Self> {
+        let content = std::fs::read_to_string(path)
+            .with_context(|| format!("failed to read config from {}", path.display()))?;
+        toml::from_str(&content)
+            .with_context(|| format!("failed to parse config from {}", path.display()))
+    }
+
+    /// Save the current config to the given path. This file also carries the
+    /// per-file hash manifest for every entry, so it's written with the same
+    /// tmpfile-then-rename approach the old standalone lock file used: a crash
+    /// mid-write can't leave a torn file behind.
+    ///
+    /// # Arguments
+    /// - `path`: The full path to save the configuration file to.
+    ///
+    /// # Returns
+    /// An error if the save operation failed in any way.
+    pub fn save(&self, path: &Path) -> Result<()> {
+        let parent = path
+            .parent()
+            .with_context(|| format!("config path {} has no parent directory", path.display()))?;
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create directory {}", parent.display()))?;
+        let content = toml::to_string_pretty(self).context("failed to serialize config")?;
+
+        let mut tmp = NamedTempFile::new_in(parent)
+            .with_context(|| format!("failed to create temp file in {}", parent.display()))?;
+        tmp.write_all(content.as_bytes())
+            .context("failed to write config file content")?;
+        tmp.persist(path)
+            .with_context(|| format!("failed to persist config to {}", path.display()))?;
+        Ok(())
+    }
+
+    /// Insert a new entry into the configuration. This does not save the entry to the file.
+    ///
+    /// # Arguments
+    /// - `name`: The name/identifier of the entry. This must be unique.
+    /// - `entry`: The new entry to add to the config.
+    ///
+    /// # Returns
+    /// Error if the name was not unique.
+    pub fn insert(&mut self, name: String, entry: EmbdEntry) -> Result<()> {
+        if self.contains(name.as_str()) {
+            bail!("{name} is not a unique key.")
+        }
+
+        let _old_value = self.0.insert(name, entry);
+        Ok(())
+    }
+
+    /// Get an entry for the given name.
+    ///
+    /// # Arguments
+    ///
+    /// - `name`: The name/identifier of the entry.
+    ///
+    /// # Returns
+    /// An [`EmbdEntry`] if one exists at the given identifier. None otherwise.
+    pub fn get(&self, name: &str) -> Option<&EmbdEntry> {
+        self.0.get(name)
+    }
+
+    /// Get a mutable reference to an entry for in-place mutation (e.g. bumping
+    /// the pinned commit). The caller is responsible for calling [`Config::save`]
+    /// afterwards to persist the change.
+    pub fn get_mut(&mut self, name: &str) -> Option<&mut EmbdEntry> {
+        self.0.get_mut(name)
+    }
+
+    /// Iterate over all entries in deterministic (sorted) order.
+    pub fn iter(&self) -> impl Iterator<Item = (&str, &EmbdEntry)> {
+        self.0.iter().map(|(k, v)| (k.as_str(), v))
+    }
+
+    /// Check if the configuration contains an entry for the given name.
+    ///
+    /// # Arguments
+    /// - `name`: The name/identifier to check.
+    ///
+    /// # Returns
+    /// True if the configuration contains the the identifier, false otherwise.
+    pub fn contains(&self, name: &str) -> bool {
+        self.0.contains_key(name)
+    }
+}
+
+/// Load a [`Config`] from the given path, or return a default one.
+///
+/// # Arguments
+///
+/// - `config_path`: The full path to the config file.
+///
+/// # Returns
+/// The loaded config if the path exists and is a valid [`Config`], otherwise the default [`Config`] is returned.
+pub fn load_or_default(config_path: &Path) -> Result<Config> {
+    match Config::load(config_path) {
+        Ok(c) => Ok(c),
+        Err(e) => {
+            if e.downcast_ref::<std::io::Error>()
+                .is_some_and(|io| io.kind() == std::io::ErrorKind::NotFound)
+            {
+                Ok(Config::default())
+            } else {
+                Err(e)
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{FileLocks, Metadata};
+    use std::path::PathBuf;
+    use tempfile::tempdir;
+
+    fn entry(remote: &str, commit_hash: &str, folder: &str) -> EmbdEntry {
+        EmbdEntry {
+            metadata: Metadata {
+                remote: remote.to_string(),
+                commit_hash: commit_hash.to_string(),
+                folder: PathBuf::from(folder),
+                allow_untracked: false,
+                include: Vec::new(),
+                exclude: Vec::new(),
+            },
+            files: FileLocks::default(),
+        }
+    }
+
+    #[test]
+    fn default_is_empty() {
+        assert!(!Config::default().contains("anything"));
+    }
+
+    #[test]
+    fn insert_and_contains() {
+        let mut config = Config::default();
+        assert!(!config.contains("mylib"));
+        let insert_result = config.insert(
+            "mylib".to_string(),
+            entry("https://example.git", "abc123", "third_party/mylib"),
+        );
+        assert!(insert_result.is_ok());
+        assert!(config.contains("mylib"));
+        assert!(!config.contains("other"));
+    }
+
+    #[test]
+    fn insert_existing_key_fails() {
+        let mut config = Config::default();
+        config
+            .insert(
+                "mylib".to_string(),
+                entry("https://example.git", "abc123", "third_party/mylib"),
+            )
+            .unwrap();
+        let result = config.insert(
+            "mylib".to_string(),
+            entry("https://other.git", "def456", "third_party/other"),
+        );
+        assert!(result.is_err());
+        assert!(config.contains("mylib"));
+    }
+
+    #[test]
+    fn get_returns_entry() {
+        let mut config = Config::default();
+        config
+            .insert(
+                "mylib".to_string(),
+                entry("https://example.git", "abc123", "third_party/mylib"),
+            )
+            .unwrap();
+        let e = config.get("mylib").unwrap();
+        let meta = e.metadata.clone();
+        assert_eq!(meta.remote, "https://example.git");
+        assert_eq!(meta.commit_hash, "abc123");
+        assert_eq!(meta.folder, PathBuf::from("third_party/mylib"));
+        assert!(config.get("missing").is_none());
+    }
+
+    #[test]
+    fn round_trip() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+
+        let mut config = Config::default();
+        config
+            .insert(
+                "repo1".to_string(),
+                entry("https://a.git", "aaa111", "third_party/a"),
+            )
+            .unwrap();
+        config
+            .insert(
+                "repo2".to_string(),
+                entry("https://b.git", "bbb222", "vendor/b"),
+            )
+            .unwrap();
+
+        let content = toml::to_string_pretty(&config).unwrap();
+        println!("{}", content);
+
+        config.save(&path).unwrap();
+
+        let loaded = Config::load(&path).unwrap();
+        let e1 = loaded.get("repo1").unwrap();
+        let m1 = e1.metadata.clone();
+        assert_eq!(m1.remote, "https://a.git");
+        assert_eq!(m1.commit_hash, "aaa111");
+        assert_eq!(m1.folder, PathBuf::from("third_party/a"));
+        // The file manifest (formerly a separate lockfile) round-trips too.
+        assert_eq!(
+            e1.files.as_map(),
+            config.get("repo1").unwrap().files.as_map()
+        );
+        assert!(loaded.get("repo2").is_some());
+    }
+
+    #[test]
+    fn save_creates_parent_directory() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join(".embd").join("config.toml");
+        Config::default().save(&path).unwrap();
+        assert!(path.exists());
+    }
+
+    #[test]
+    fn load_parses_toml_format() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(
+            &path,
+            r#"
+[repo1.metadata]
+remote = "https://example.git"
+commit_hash = "abc123"
+folder = "third_party/repo1"
+allow_untracked = false
+
+[repo1.files]
+"a.txt" = "sha256:abc"
+"#,
+        )
+        .unwrap();
+        let config = Config::load(&path).unwrap();
+        let e = config.get("repo1").unwrap();
+        let meta = e.metadata.clone();
+        assert_eq!(meta.remote, "https://example.git");
+        assert_eq!(meta.commit_hash, "abc123");
+        assert_eq!(
+            e.files.as_map().get("a.txt"),
+            Some(&"sha256:abc".to_string())
+        );
+    }
+
+    #[test]
+    fn load_missing_file_errors() {
+        let result = Config::load(Path::new("/nonexistent/path/config.toml"));
+        assert!(result.is_err());
+        assert!(format!("{:#}", result.unwrap_err()).contains("failed to read config"));
+    }
+
+    #[test]
+    fn load_rejects_toml_missing_allow_untracked() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(
+            &path,
+            r#"
+[repo1.metadata]
+remote = "https://example.git"
+commit_hash = "abc123"
+folder = "third_party/repo1"
+"#,
+        )
+        .unwrap();
+        let result = Config::load(&path);
+        assert!(result.is_err(), "missing allow_untracked must be rejected");
+        assert!(
+            format!("{:#}", result.unwrap_err()).contains("allow_untracked"),
+            "error should mention the missing field"
+        );
+    }
+
+    #[test]
+    fn get_mut_allows_in_place_mutation() {
+        let mut config = Config::default();
+        config
+            .insert(
+                "mylib".to_string(),
+                entry("https://example.git", "abc123", "third_party/mylib"),
+            )
+            .unwrap();
+        let e = config.get_mut("mylib").unwrap();
+        e.metadata.commit_hash = "def456".to_string();
+        assert_eq!(config.get("mylib").unwrap().metadata.commit_hash, "def456");
+        assert!(config.get_mut("missing").is_none());
+    }
+
+    #[test]
+    fn iter_yields_entries_in_sorted_order() {
+        let mut config = Config::default();
+        config
+            .insert("zebra".to_string(), entry("https://z.git", "z", "z"))
+            .unwrap();
+        config
+            .insert("alpha".to_string(), entry("https://a.git", "a", "a"))
+            .unwrap();
+        config
+            .insert("mango".to_string(), entry("https://m.git", "m", "m"))
+            .unwrap();
+        let names: Vec<&str> = config.iter().map(|(n, _)| n).collect();
+        assert_eq!(names, vec!["alpha", "mango", "zebra"]);
+    }
+
+    #[test]
+    fn load_malformed_toml_errors() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "not valid toml {{{{").unwrap();
+        let result = Config::load(&path);
+        assert!(result.is_err());
+        assert!(format!("{:#}", result.unwrap_err()).contains("failed to parse config"));
+    }
+}

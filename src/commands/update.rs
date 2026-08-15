@@ -7,9 +7,8 @@ use tempfile::tempdir;
 use crate::color;
 use crate::commands::common::select_entries;
 use crate::commands::status::print_report;
-use crate::config::{self, Config, EmbdEntry};
+use crate::config::{self, Config, EmbdEntry, EntryState, FileChange, FileLocks};
 use crate::filter::Filter;
-use crate::lockfile::{self, EntryState, FileChange, LockEntry, Lockfile};
 use crate::{git, paths};
 
 #[derive(clap::Args, Debug)]
@@ -41,8 +40,6 @@ pub(crate) fn execute(args: UpdateArgs) -> Result<()> {
     let root = paths::find_git_root()?;
     let config_path = paths::config_path(&root);
     let mut config = config::load_or_default(&config_path)?;
-    let lock_path = paths::lock_path(&root);
-    let mut lock = Lockfile::load_or_default(&lock_path)?;
 
     let selected: Vec<(String, EmbdEntry)> = select_entries(&config, &args.names)?
         .into_iter()
@@ -55,16 +52,7 @@ pub(crate) fn execute(args: UpdateArgs) -> Result<()> {
 
     let mut any_failed = false;
     for (name, entry) in &selected {
-        match process_entry(
-            &root,
-            name,
-            entry,
-            &args,
-            &mut config,
-            &config_path,
-            &mut lock,
-            &lock_path,
-        ) {
+        match process_entry(&root, name, entry, &args, &mut config, &config_path) {
             Ok(outcome) => {
                 print_outcome(name, entry, &outcome, args.quiet);
                 if outcome.is_failure() {
@@ -87,13 +75,11 @@ pub(crate) fn execute(args: UpdateArgs) -> Result<()> {
 /// Per-entry outcome.
 #[derive(Debug)]
 enum Outcome {
-    /// Clean, not stale, no `--rev` (or rev resolves to the existing pin). No clone done.
+    /// Clean, no `--rev` (or rev resolves to the existing pin). No clone done.
     UpToDate,
     /// Drift detected, `--force` not given. Drift was already printed via `print_report`.
     SkippedDrift,
-    /// Lockfile missing, `--force` not given.
-    SkippedNoLockfile,
-    /// Applied: files synced, manifest saved, config saved if `--rev` bumped the pin.
+    /// Applied: files synced, config saved (pin + manifest) if anything changed.
     Updated {
         old_commit: String,
         new_commit: String,
@@ -103,7 +89,7 @@ enum Outcome {
 
 impl Outcome {
     fn is_failure(&self) -> bool {
-        matches!(self, Outcome::SkippedDrift | Outcome::SkippedNoLockfile)
+        matches!(self, Outcome::SkippedDrift)
     }
 }
 
@@ -133,31 +119,20 @@ fn process_entry(
     args: &UpdateArgs,
     config: &mut Config,
     config_path: &Path,
-    lock: &mut Lockfile,
-    lock_path: &Path,
 ) -> Result<Outcome> {
-    let report = lockfile::inspect_entry(root, name, entry, lock.get(name));
+    let report = config::inspect_entry(root, name, entry);
 
     // Short-circuit no-op: only safe when no --rev was requested. With --rev we
     // must still resolve the ref to know whether it changes the pin.
-    if args.rev.is_none()
-        && report.state == EntryState::Compared
-        && report.stale.is_none()
-        && report.changes.is_empty()
-    {
+    if args.rev.is_none() && report.state == EntryState::Compared && report.changes.is_empty() {
         return Ok(Outcome::UpToDate);
     }
 
-    // No lockfile gate. Folder exists but we have no manifest to diff against.
-    if report.state == EntryState::Missing && !args.force {
-        return Ok(Outcome::SkippedNoLockfile);
-    }
-
-    // Drift gate. Only file-level drift requires --force; pure staleness is what
-    // update exists to apply.
+    // Drift gate. Only file-level drift requires --force; a pure --rev bump is
+    // what update exists to apply.
     let has_file_drift = report.state == EntryState::Compared
         && report.changes.iter().any(|c| match c {
-            FileChange::Untracked(_) => !entry.allow_untracked,
+            FileChange::Untracked(_) => !entry.metadata.allow_untracked,
             _ => true,
         });
     if has_file_drift && !args.force {
@@ -169,64 +144,67 @@ fn process_entry(
     // Always full clone: the rev we check out may be any historical commit
     // (entry.commit_hash for re-sync, or args.rev for a bump), not HEAD.
     let tmp = tempdir().context("failed to create temporary directory")?;
-    git::cli::clone(&entry.remote, tmp.path(), false)?;
-    let rev_to_checkout = args.rev.as_ref().unwrap_or(&entry.commit_hash);
+    git::cli::clone(&entry.metadata.remote, tmp.path(), false)?;
+    let rev_to_checkout = args.rev.as_ref().unwrap_or(&entry.metadata.commit_hash);
     git::cli::checkout(tmp.path(), rev_to_checkout.clone())?;
     let new_commit = git::cli::commit_hash_of(tmp.path())?;
 
     // If --rev resolved to the existing pin and there's no drift, this is also a no-op.
     if args.rev.is_some()
-        && new_commit == entry.commit_hash
+        && new_commit == entry.metadata.commit_hash
         && report.state == EntryState::Compared
-        && report.stale.is_none()
         && report.changes.is_empty()
     {
         return Ok(Outcome::UpToDate);
     }
 
     // Folder-missing recovery: create the destination folder. Lossless.
-    let folder_abs = root.join(&entry.folder);
+    let folder_abs = root.join(&entry.metadata.folder);
     if report.state == EntryState::FolderMissing {
         std::fs::create_dir_all(&folder_abs)
             .with_context(|| format!("failed to create folder {}", folder_abs.display()))?;
     }
 
-    let old_commit = entry.commit_hash.clone();
+    let old_commit = entry.metadata.commit_hash.clone();
 
-    // Save config first when --rev moves the pin. Durable pin is the source of
-    // truth; a crash after this point is recoverable via `update --force`.
-    if args.rev.is_some() && new_commit != entry.commit_hash {
+    // Save config first when --rev moves the pin, before the file manifest
+    // catches up. Durable pin is the source of truth; a crash after this point
+    // is recoverable via `update --force`.
+    if args.rev.is_some() && new_commit != entry.metadata.commit_hash {
         let e = config
             .get_mut(name)
             .with_context(|| format!("entry '{name}' disappeared from config"))?;
-        e.commit_hash = new_commit.clone();
+        e.metadata.commit_hash = new_commit.clone();
         config.save(config_path)?;
     }
 
-    // Build the prospective lock entry from the temp clone, applying the same
-    // include/exclude filter the entry was added with so filtered-out files are
-    // never re-introduced.
-    let filter = Filter::from_patterns(&entry.include, &entry.exclude)?;
-    let new_entry = LockEntry::build_from_path_filtered(tmp.path(), new_commit.clone(), &filter)?;
+    // Build the prospective file manifest from the temp clone, applying the
+    // same include/exclude filter the entry was added with so filtered-out
+    // files are never re-introduced.
+    let filter = Filter::from_patterns(&entry.metadata.include, &entry.metadata.exclude)?;
+    let new_files = FileLocks::build_from_path_filtered(tmp.path(), &filter)?;
 
-    // Take the old file list from the lock entry, or treat as empty for
-    // no-lockfile / folder-missing.
+    // Take the old file list from the entry's current manifest, or treat as
+    // empty for folder-missing.
     let old_files: BTreeMap<String, String> = match report.state {
-        EntryState::Compared => lock.get(name).map(|e| e.files.clone()).unwrap_or_default(),
-        EntryState::Missing | EntryState::FolderMissing => BTreeMap::new(),
+        EntryState::Compared => entry.files.as_map().clone(),
+        EntryState::FolderMissing => BTreeMap::new(),
     };
 
     let changes = apply_update(
         tmp.path(),
         &folder_abs,
         &old_files,
-        &new_entry.files,
+        new_files.as_map(),
         args.overwrite,
     )?;
 
-    // Save the updated lock file last.
-    lock.upsert(name.to_string(), new_entry);
-    lock.save(lock_path)?;
+    // Save the updated file manifest last.
+    let e = config
+        .get_mut(name)
+        .with_context(|| format!("entry '{name}' disappeared from config"))?;
+    e.files = new_files;
+    config.save(config_path)?;
 
     Ok(Outcome::Updated {
         old_commit,
@@ -255,7 +233,7 @@ fn apply_update(
 
         if let Ok(meta) = std::fs::symlink_metadata(&dst_path)
             && meta.is_file()
-            && let Ok(disk_hash) = lockfile::hash_file(&dst_path)
+            && let Ok(disk_hash) = config::hash_file(&dst_path)
             && disk_hash == *new_hash
         {
             continue;
@@ -304,7 +282,7 @@ fn apply_update(
 
     // --overwrite sweep: remove anything on disk that isn't in `new_files`.
     if overwrite {
-        let on_disk = lockfile::scan_folder(dst).unwrap_or_default();
+        let on_disk = config::scan_folder(dst).unwrap_or_default();
         for key in on_disk.keys() {
             if new_files.contains_key(key) {
                 continue;
@@ -371,12 +349,9 @@ fn short(commit: &str) -> &str {
 fn print_outcome(name: &str, entry: &EmbdEntry, outcome: &Outcome, quiet: bool) {
     use anstream::{eprintln, println};
 
-    let header = color::header(&format!("{name} ({})", entry.folder.display()));
+    let header = color::header(&format!("{name} ({})", entry.metadata.folder.display()));
     match outcome {
         Outcome::UpToDate => println!("{header}: {}", color::ok("up to date")),
-        Outcome::SkippedNoLockfile => {
-            println!("{header}: {}", color::bad("no lock file (use --force)"))
-        }
         Outcome::SkippedDrift => {
             // The detailed diff was already printed via print_report. Add a trailing
             // hint so the user knows what to do.
@@ -431,10 +406,8 @@ mod tests {
         fs::write(path, contents).unwrap();
     }
 
-    fn manifest_for(folder: &Path, commit: &str) -> BTreeMap<String, String> {
-        LockEntry::build_from_path(folder, commit.to_string())
-            .unwrap()
-            .files
+    fn manifest_for(folder: &Path, _commit: &str) -> BTreeMap<String, String> {
+        FileLocks::build_from_path(folder).unwrap().as_map().clone()
     }
 
     #[test]

@@ -7,8 +7,7 @@ use anyhow::{Result, bail};
 use crate::git;
 
 const EMBD_FOLDER: &str = ".embd";
-const CONFIG_FILE: &str = "config.toml";
-const LOCK_FILE: &str = "embd.lock";
+const CONFIG_FILE: &str = "embd.toml";
 
 /// Finds the git root of the current directory.
 pub(crate) fn find_git_root() -> Result<PathBuf> {
@@ -28,8 +27,10 @@ pub(crate) fn project_folder(root_path: &Path) -> PathBuf {
     root_path.join(EMBD_FOLDER)
 }
 
-/// Get the path to the config file in a given root path. Note that this
-/// function does not ensure that the file exists.
+/// Get the path to the config file in a given root path. This is the single
+/// consolidated file holding both the pinned metadata (remote, commit, etc.)
+/// and the per-file hash manifest for every embed. Note that this function
+/// does not ensure that the file exists.
 ///
 /// # Arguments
 ///
@@ -39,12 +40,6 @@ pub(crate) fn project_folder(root_path: &Path) -> PathBuf {
 /// [`PathBuf`] to the configuration file.
 pub(crate) fn config_path(root_path: &Path) -> PathBuf {
     project_folder(root_path).join(CONFIG_FILE)
-}
-
-/// Get the path to the consolidated lock file inside the embd project folder.
-/// Note that this function does not ensure that the file exists.
-pub(crate) fn lock_path(root_path: &Path) -> PathBuf {
-    project_folder(root_path).join(LOCK_FILE)
 }
 
 /// Resolve a user-supplied target folder against the current working directory
@@ -193,9 +188,9 @@ mod tests {
     }
 
     #[test]
-    fn lock_path_is_inside_project_folder() {
+    fn config_path_is_inside_project_folder() {
         let root = Path::new("/repo");
-        assert_eq!(lock_path(root), PathBuf::from("/repo/.embd/embd.lock"));
+        assert_eq!(config_path(root), PathBuf::from("/repo/.embd/embd.toml"));
     }
 
     #[test]

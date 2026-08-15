@@ -1,16 +1,16 @@
 # Design of `embd`
 
-The basic goal of `embd` is to provide a simple way to "embed" one git repository into another. The prime source of inspiration for this project is the [beman-submodule](https://github.com/bemanproject/beman-submodule) tool, which is implemented in Python and is available on PyPI. `embd`, on the other hand, is implemented in Rust and will be available as a static binary which provides many options for distibution and installation.
+The basic goal of `embd` is to provide a simple way to "embed" one git repository into another. The prime source of inspiration for this project is the [beman-submodule](https://github.com/bemanproject/beman-submodule) tool, which is implemented in Python and is available on PyPI. `embd`, on the other hand, is implemented in Rust and will be available as a static binary which provides many options for distribution and installation.
 
-An additional goal of `embd` is to be more general purpose than `beman-submodule` which is more closely tied to the goals and setup that the various `Beman` projects use.
+An additional goal of `embd` is to be more general purpose than `beman-submodule`, which is more closely tied to the goals and setup that the various `Beman` projects use.
 
 ## Why?
 
-Both `beman-submodule` and `embd` aim to be alternatives to either [git submodules](https://git-scm.com/book/en/v2/Git-Tools-Submodules) and [git subtree](https://www.atlassian.com/git/tutorials/git-subtree). [Eddie Nolan](https://www.ednolan.com) put together a set of [slides](https://www.ednolan.com/toolchains_slides.pdf) to show the differences and limitations of both `git subtree` and `git submodule`, so I won't go into that too much here. The gist is that `git submodule` provides a subpar user experience (users have to remember to run `git submodule update --init`) and `git subtree`s force merge commits in your history.
+Both `beman-submodule` and `embd` aim to be alternatives to either [git submodules](https://git-scm.com/book/en/v2/Git-Tools-Submodules) or [git subtree](https://www.atlassian.com/git/tutorials/git-subtree). [Eddie Nolan](https://www.ednolan.com) put together a set of [slides](https://www.ednolan.com/toolchains_slides.pdf) to show the differences and limitations of both `git subtree` and `git submodule`, so I won't go into that too much here. The gist is that `git submodule` provides a subpar user experience (users have to remember to run `git submodule update --init`) and `git subtree`s force merge commits in your history.
 
 ## What's the solution?
 
-The general idea is to pull the dependant repository as source into the parent repository. This puts the burden of keeping dependencies up to date on the maintainer. `embd` helps in making that process easier for the maintainer.
+The general idea is to pull the dependent repository as source into the parent repository. This puts the burden of keeping dependencies up to date on the maintainer. `embd` helps in making that process easier for the maintainer.
 
 ## Design
 
@@ -22,22 +22,26 @@ The general idea is to pull the dependant repository as source into the parent r
 | `update` | Update all embeds to match the config file. |                                          `rev`: Specify the commit, tag or branch to advance to \n `force`: Overwrite any local modification \n `overwrite`: Delete all untracked files (requries `force`) \n `quiet`: Print summaries, not each file updates.                                          |
 | `status` |       Show the status of all embeds.        |                                                                                                                           `quiet`: Should summaries per embed, not per file.                                                                                                                            |
 
-### Config File
+### Configuration File
 
-The configuration file describes all the embedded sources.
+`embd` keeps a single consolidated file, `.embd/embd.toml`, describing all the embedded sources. Each entry has a `metadata` table which includes data like the remote repository URL, commit, folder, and include/exclude filters. The config entry also includes a `files` table of sha256 hashes per tracked file. This is used to detect local drift without having to re-pull or clone files from the remote.
 
 ```toml
-[repo1]
-remote="https://example.git"
-commit_hash=123abcd1234
-folder=/example
+[repo1.metadata]
+remote = "https://example.git"
+commit_hash = "123abcd1234"
+folder = "example"
+allow_untracked = false
 
-[repo2]
-remote="https://example2.git"
-commit_hash=123abcd1234
-folder=/example2
+[repo1.files]
+"a.txt" = "sha256:..."
+
+[repo2.metadata]
+remote = "https://example2.git"
+commit_hash = "123abcd1234"
+folder = "example2"
+allow_untracked = false
+
+[repo2.files]
+"b.txt" = "sha256:..."
 ```
-
-### Lockfile
-
-In addition to the config file, `embd` maintains a lockfile to check for differences in the local files and changes to the subfolder an embed is put into. This serves as an easy way to verify file status without pull the files again from the remote location.
