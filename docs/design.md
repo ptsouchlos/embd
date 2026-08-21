@@ -24,24 +24,17 @@ The general idea is to pull the dependent repository as source into the parent r
 
 ### Configuration File
 
-`embd` keeps a single consolidated file, `.embd/embd.toml`, describing all the embedded sources. Each entry has a `metadata` table which includes data like the remote repository URL, commit, folder, and include/exclude filters. The config entry also includes a `files` table of sha256 hashes per tracked file. This is used to detect local drift without having to re-pull or clone files from the remote.
+`embd` stores one configuration file per embed, named `.embd`, inside the embedded folder itself — mirroring how [beman-submodule](https://github.com/bemanproject/beman-submodule) stores a `.beman_submodule` file inside each submodule it manages. There's no project-wide config file; `embd` discovers embeds by walking the project tree for `.embd` files.
+
+Each file has a `metadata` table with the remote repository URL, commit, and include/exclude filters, plus a `files` table of sha256 hashes per tracked file, used to detect local drift without re-pulling or cloning files from the remote. The embed's folder isn't stored in the file — it's implied by the file's own location.
 
 ```toml
-[repo1.metadata]
+# example/.embd
+[metadata]
 remote = "https://example.git"
 commit_hash = "123abcd1234"
-folder = "example"
 allow_untracked = false
 
-[repo1.files]
+[files]
 "a.txt" = "sha256:..."
-
-[repo2.metadata]
-remote = "https://example2.git"
-commit_hash = "123abcd1234"
-folder = "example2"
-allow_untracked = false
-
-[repo2.files]
-"b.txt" = "sha256:..."
 ```
