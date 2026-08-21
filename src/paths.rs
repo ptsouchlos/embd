@@ -2,12 +2,13 @@
 
 use std::path::{Component, Path, PathBuf};
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 
 use crate::git;
 
-const EMBD_FOLDER: &str = ".embd";
-const CONFIG_FILE: &str = "embd.toml";
+/// Name of the file `embd` stores inside each embedded folder, holding that
+/// embed's pinned metadata and file manifest.
+pub(crate) const SUBMODULE_FILE: &str = ".embd";
 
 /// Finds the git root of the current directory.
 pub(crate) fn find_git_root() -> Result<PathBuf> {
@@ -15,31 +16,71 @@ pub(crate) fn find_git_root() -> Result<PathBuf> {
     git::cli::find_git_root(cwd)
 }
 
-/// Get the root folder of where `embd` stores its data.
+/// Get the path to the `.embd` file inside a given embedded folder. Note that
+/// this function does not ensure that the file exists.
 ///
 /// # Arguments
 ///
-/// - `root_path`: The root path.
+/// - `folder`: The absolute path to the embedded folder.
 ///
 /// # Returns
-/// [`PathBuf`] to the project folder.
-pub(crate) fn project_folder(root_path: &Path) -> PathBuf {
-    root_path.join(EMBD_FOLDER)
+/// [`PathBuf`] to the folder's configuration file.
+pub(crate) fn submodule_file_path(folder: &Path) -> PathBuf {
+    folder.join(SUBMODULE_FILE)
 }
 
-/// Get the path to the config file in a given root path. This is the single
-/// consolidated file holding both the pinned metadata (remote, commit, etc.)
-/// and the per-file hash manifest for every embed. Note that this function
-/// does not ensure that the file exists.
+/// Walk the tree from `root`, skipping `.git`, and return every folder
+/// (relative to `root`) that directly contains a `.embd` submodule file.
+/// Sorted lexicographically for deterministic output.
 ///
 /// # Arguments
 ///
-/// - `root_path`: The root path to search.
+/// - `root`: The git root to search from.
 ///
 /// # Returns
-/// [`PathBuf`] to the configuration file.
-pub(crate) fn config_path(root_path: &Path) -> PathBuf {
-    project_folder(root_path).join(CONFIG_FILE)
+/// Sorted folder paths, each relative to `root`.
+pub(crate) fn discover_submodule_folders(root: &Path) -> Result<Vec<PathBuf>> {
+    let mut out = Vec::new();
+    discover_inner(root, Path::new(""), &mut out)?;
+    out.sort();
+    Ok(out)
+}
+
+fn discover_inner(root: &Path, relative: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
+    let absolute = root.join(relative);
+    let read = std::fs::read_dir(&absolute)
+        .with_context(|| format!("failed to read directory {}", absolute.display()))?;
+
+    let mut has_marker = false;
+    let mut subdirs = Vec::new();
+    for entry in read {
+        let entry = entry?;
+        let name = entry.file_name();
+        if name == ".git" {
+            continue;
+        }
+        let file_type = entry
+            .file_type()
+            .with_context(|| format!("failed to read file type of {}", entry.path().display()))?;
+        if file_type.is_symlink() {
+            continue;
+        }
+        if file_type.is_file() && name == SUBMODULE_FILE {
+            has_marker = true;
+            continue;
+        }
+        if file_type.is_dir() {
+            subdirs.push(relative.join(&name));
+        }
+    }
+
+    if has_marker {
+        out.push(relative.to_path_buf());
+    }
+    for sub in subdirs {
+        discover_inner(root, &sub, out)?;
+    }
+    Ok(())
 }
 
 /// Resolve a user-supplied target folder against the current working directory
@@ -111,7 +152,6 @@ fn lexically_normalize(p: &Path) -> PathBuf {
         match component {
             Component::CurDir => {}
             Component::ParentDir => {
-                // Don't pop past the root prefix.
                 let popped = out.pop();
                 if !popped {
                     out.push("..");
@@ -188,17 +228,57 @@ mod tests {
     }
 
     #[test]
-    fn config_path_is_inside_project_folder() {
-        let root = Path::new("/repo");
-        assert_eq!(config_path(root), PathBuf::from("/repo/.embd/embd.toml"));
-    }
-
-    #[test]
     fn accepts_absolute_path_inside_root() {
         let tmp = tempdir().unwrap();
         let root = tmp.path();
         let abs = root.join("nested").join("dir");
         let (_, rel) = resolve_inside_root(&abs, root, root).unwrap();
         assert_eq!(rel, PathBuf::from("nested").join("dir"));
+    }
+
+    #[test]
+    fn submodule_file_path_is_dot_embd_inside_folder() {
+        let folder = Path::new("/repo/infra");
+        assert_eq!(
+            submodule_file_path(folder),
+            PathBuf::from("/repo/infra/.embd")
+        );
+    }
+
+    #[test]
+    fn discover_finds_all_dot_embd_files_sorted() {
+        let tmp = tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir_all(root.join("zebra")).unwrap();
+        std::fs::write(root.join("zebra/.embd"), "x").unwrap();
+        std::fs::create_dir_all(root.join("nested/alpha")).unwrap();
+        std::fs::write(root.join("nested/alpha/.embd"), "x").unwrap();
+
+        let found = discover_submodule_folders(root).unwrap();
+        assert_eq!(
+            found,
+            vec![
+                PathBuf::from("nested").join("alpha"),
+                PathBuf::from("zebra"),
+            ]
+        );
+    }
+
+    #[test]
+    fn discover_skips_git_directory() {
+        let tmp = tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir_all(root.join(".git")).unwrap();
+        std::fs::write(root.join(".git/.embd"), "x").unwrap();
+        let found = discover_submodule_folders(root).unwrap();
+        assert!(found.is_empty());
+    }
+
+    #[test]
+    fn discover_returns_empty_for_no_embeds() {
+        let tmp = tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join("plain")).unwrap();
+        let found = discover_submodule_folders(tmp.path()).unwrap();
+        assert!(found.is_empty());
     }
 }

@@ -83,6 +83,15 @@ mod tests {
         assert_eq!(files, vec![PathBuf::from("keep.txt")]);
     }
 
+    #[test]
+    fn walk_files_skips_embd_marker() {
+        let dir = tempdir().unwrap();
+        std::fs::write(dir.path().join(".embd"), "marker").unwrap();
+        std::fs::write(dir.path().join("keep.txt"), "k").unwrap();
+        let files = walk_files(dir.path(), &Filter::allow_all()).unwrap();
+        assert_eq!(files, vec![PathBuf::from("keep.txt")]);
+    }
+
     #[cfg(unix)]
     #[test]
     fn walk_files_skips_symlinks() {

@@ -7,12 +7,13 @@ use anyhow::{Context, Result, bail};
 
 use crate::config::path_to_key;
 use crate::filter::Filter;
+use crate::paths::SUBMODULE_FILE;
 
 /// Return true if a directory entry should be skipped when walking embedded
 /// folders (both during copy and during status hashing). Centralizing the rule
 /// here keeps the two walkers in sync.
 pub(crate) fn is_skipped_entry(name: &OsStr) -> bool {
-    name == ".git"
+    name == ".git" || name == SUBMODULE_FILE
 }
 
 /// Recursively copy a directory from `src` to `dst`, ignoring any `.git`
@@ -158,6 +159,20 @@ mod tests {
         copy_dir(&src, &dst, &Filter::allow_all()).unwrap();
         assert!(dst.join("keep.txt").exists());
         assert!(!dst.join(".git").exists());
+    }
+
+    #[test]
+    fn skips_embd_marker_file() {
+        let tmp = tempdir().unwrap();
+        let src = tmp.path().join("src");
+        let dst = tmp.path().join("dst");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(src.join(".embd"), "marker").unwrap();
+        std::fs::write(src.join("keep.txt"), "k").unwrap();
+
+        copy_dir(&src, &dst, &Filter::allow_all()).unwrap();
+        assert!(dst.join("keep.txt").exists());
+        assert!(!dst.join(".embd").exists());
     }
 
     #[cfg(unix)]

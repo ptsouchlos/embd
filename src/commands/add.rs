@@ -4,7 +4,7 @@ use anyhow::{Context, Result, bail};
 use tempfile::tempdir;
 
 use crate::color;
-use crate::config::{self, EmbdEntry, FileLocks, Metadata};
+use crate::config::{EmbdEntry, FileLocks, Metadata};
 use crate::filter::Filter;
 use crate::{filesystem, git, paths};
 
@@ -52,24 +52,20 @@ fn parse_patterns(arg: &Option<String>) -> Vec<String> {
 
 pub(crate) fn execute(args: AddArgs) -> Result<()> {
     let root = paths::find_git_root()?;
-    let config_path = paths::config_path(&root);
     let cwd = std::env::current_dir().context("failed to read current directory")?;
 
     // Validate the link and filter patterns before doing any I/O.
-    let (link, repo_name) = git::parse_repo_link(&args.link)?;
-    let (folder_abs, folder_rel) = paths::resolve_inside_root(&args.folder, &root, &cwd)?;
+    let (link, _repo_name) = git::parse_repo_link(&args.link)?;
+    let (folder_abs, _folder_rel) = paths::resolve_inside_root(&args.folder, &root, &cwd)?;
     let include = parse_patterns(&args.include);
     let exclude = parse_patterns(&args.exclude);
     let filter = Filter::from_patterns(&include, &exclude)?;
 
-    // Load the config, or use a default one
-    let mut config = config::load_or_default(&config_path)?;
-
-    // Check if the config already contains an entry for the given repo.
-    if config.contains(&repo_name) {
+    let config_path = paths::submodule_file_path(&folder_abs);
+    if config_path.exists() {
         bail!(
-            "an embed named '{}' already exists in {}",
-            repo_name,
+            "'{}' is already an embed ({} exists)",
+            args.folder.display(),
             config_path.display()
         );
     }
@@ -104,28 +100,26 @@ pub(crate) fn execute(args: AddArgs) -> Result<()> {
         // Hash the destination folder as-copied (not just what the filter
         // allowed) so a pre-existing --allow-untracked folder's contents are
         // reflected too, matching what `copy_dir` actually left on disk.
+        // `.embd` itself is excluded by `filesystem::is_skipped_entry`, so
+        // it never ends up hashing itself.
         let files = FileLocks::build_from_path(&folder_abs)?;
-        config.insert(
-            repo_name.clone(),
-            EmbdEntry {
-                metadata: Metadata {
-                    remote: link,
-                    commit_hash,
-                    folder: folder_rel,
-                    allow_untracked: args.allow_untracked,
-                    include,
-                    exclude,
-                },
-                files,
+        let entry = EmbdEntry {
+            metadata: Metadata {
+                remote: link,
+                commit_hash,
+                allow_untracked: args.allow_untracked,
+                include,
+                exclude,
             },
-        )?;
-        config.save(&config_path)?;
+            files,
+        };
+        entry.save(&config_path)?;
         Ok(())
     })();
 
     if let Err(e) = result {
         // If there was an error, try to rollback to the previous state. Nothing
-        // is written to config.toml unless the whole closure above succeeds, so
+        // is written to disk unless the whole closure above succeeds, so
         // there's no separate on-disk manifest entry to clean up here.
         rollback(&folder_abs, folder_existed, args.allow_untracked);
         // Propagate the error up to the caller

@@ -7,16 +7,16 @@ use tempfile::tempdir;
 use crate::color;
 use crate::commands::common::select_entries;
 use crate::commands::status::print_report;
-use crate::config::{self, Config, EmbdEntry, EntryState, FileChange, FileLocks};
+use crate::config::{self, EmbdEntry, EntryState, FileChange, FileLocks};
 use crate::filter::Filter;
 use crate::{git, paths};
 
 #[derive(clap::Args, Debug)]
 pub(crate) struct UpdateArgs {
-    /// Optional names to update. When empty, every entry in the config is updated.
-    names: Vec<String>,
+    /// Optional folder paths to update. When empty, every embed in the project is updated.
+    folders: Vec<String>,
     /// Rev (commit hash, tag, or branch) to advance the entry's pin to.
-    /// Requires exactly one name.
+    /// Requires exactly one folder.
     #[clap(short, long)]
     rev: Option<String>,
     /// Overwrite local modifications to tracked files. Untracked files are
@@ -38,29 +38,24 @@ pub(crate) fn execute(args: UpdateArgs) -> Result<()> {
     }
 
     let root = paths::find_git_root()?;
-    let config_path = paths::config_path(&root);
-    let mut config = config::load_or_default(&config_path)?;
+    let cwd = std::env::current_dir().context("failed to read current directory")?;
+    let selected = select_entries(&root, &args.folders, &cwd)?;
 
-    let selected: Vec<(String, EmbdEntry)> = select_entries(&config, &args.names)?
-        .into_iter()
-        .map(|(n, e)| (n.to_string(), e.clone()))
-        .collect();
-
-    if args.rev.is_some() && args.names.len() != 1 {
-        bail!("--rev requires exactly one name to be specified");
+    if args.rev.is_some() && args.folders.len() != 1 {
+        bail!("--rev requires exactly one folder to be specified");
     }
 
     let mut any_failed = false;
-    for (name, entry) in &selected {
-        match process_entry(&root, name, entry, &args, &mut config, &config_path) {
+    for (folder, entry) in selected {
+        match process_entry(&root, &folder, entry, &args) {
             Ok(outcome) => {
-                print_outcome(name, entry, &outcome, args.quiet);
+                print_outcome(&folder, &outcome, args.quiet);
                 if outcome.is_failure() {
                     any_failed = true;
                 }
             }
             Err(e) => {
-                anstream::eprintln!("{} {name}: {e:#}", color::error_label());
+                anstream::eprintln!("{} {}: {e:#}", color::error_label(), folder.display());
                 any_failed = true;
             }
         }
@@ -111,16 +106,14 @@ impl UpdateChange {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn process_entry(
     root: &Path,
-    name: &str,
-    entry: &EmbdEntry,
+    folder: &Path,
+    mut entry: EmbdEntry,
     args: &UpdateArgs,
-    config: &mut Config,
-    config_path: &Path,
 ) -> Result<Outcome> {
-    let report = config::inspect_entry(root, name, entry);
+    let config_path = paths::submodule_file_path(&root.join(folder));
+    let report = config::inspect_entry(root, folder, &entry);
 
     // Short-circuit no-op: only safe when no --rev was requested. With --rev we
     // must still resolve the ref to know whether it changes the pin.
@@ -159,7 +152,7 @@ fn process_entry(
     }
 
     // Folder-missing recovery: create the destination folder. Lossless.
-    let folder_abs = root.join(&entry.metadata.folder);
+    let folder_abs = root.join(folder);
     if report.state == EntryState::FolderMissing {
         std::fs::create_dir_all(&folder_abs)
             .with_context(|| format!("failed to create folder {}", folder_abs.display()))?;
@@ -171,11 +164,8 @@ fn process_entry(
     // catches up. Durable pin is the source of truth; a crash after this point
     // is recoverable via `update --force`.
     if args.rev.is_some() && new_commit != entry.metadata.commit_hash {
-        let e = config
-            .get_mut(name)
-            .with_context(|| format!("entry '{name}' disappeared from config"))?;
-        e.metadata.commit_hash = new_commit.clone();
-        config.save(config_path)?;
+        entry.metadata.commit_hash = new_commit.clone();
+        entry.save(&config_path)?;
     }
 
     // Build the prospective file manifest from the temp clone, applying the
@@ -200,11 +190,8 @@ fn process_entry(
     )?;
 
     // Save the updated file manifest last.
-    let e = config
-        .get_mut(name)
-        .with_context(|| format!("entry '{name}' disappeared from config"))?;
-    e.files = new_files;
-    config.save(config_path)?;
+    entry.files = new_files;
+    entry.save(&config_path)?;
 
     Ok(Outcome::Updated {
         old_commit,
@@ -346,10 +333,10 @@ fn short(commit: &str) -> &str {
     }
 }
 
-fn print_outcome(name: &str, entry: &EmbdEntry, outcome: &Outcome, quiet: bool) {
+fn print_outcome(folder: &Path, outcome: &Outcome, quiet: bool) {
     use anstream::{eprintln, println};
 
-    let header = color::header(&format!("{name} ({})", entry.metadata.folder.display()));
+    let header = color::header(&folder.display().to_string());
     match outcome {
         Outcome::UpToDate => println!("{header}: {}", color::ok("up to date")),
         Outcome::SkippedDrift => {

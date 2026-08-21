@@ -1,5 +1,3 @@
-use std::path::PathBuf;
-
 use serde::{Deserialize, Serialize};
 
 /// Represents the metadata stored for a single entry in `embd`'s configuration file.
@@ -7,7 +5,6 @@ use serde::{Deserialize, Serialize};
 pub struct Metadata {
     pub remote: String,
     pub commit_hash: String,
-    pub folder: PathBuf,
     pub allow_untracked: bool,
     /// Glob patterns; when non-empty, only matching files are pulled.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
