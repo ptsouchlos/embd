@@ -112,7 +112,7 @@ fn process_entry(
     mut entry: EmbdEntry,
     args: &UpdateArgs,
 ) -> Result<Outcome> {
-    let config_path = paths::submodule_file_path(&root.join(folder));
+    let config_path = paths::embed_file_path(&root.join(folder));
     let report = config::inspect_entry(root, folder, &entry);
 
     // Short-circuit no-op: only safe when no --rev was requested. With --rev we

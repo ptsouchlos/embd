@@ -7,13 +7,15 @@ use anyhow::{Context, Result, bail};
 
 use crate::config::path_to_key;
 use crate::filter::Filter;
-use crate::paths::SUBMODULE_FILE;
+use crate::paths::EMBED_FILE;
 
 /// Return true if a directory entry should be skipped when walking embedded
-/// folders (both during copy and during status hashing). Centralizing the rule
-/// here keeps the two walkers in sync.
+/// folders (both during copy and during status hashing). Skips both the
+/// `.git` directory and the `.embd` marker file itself, which is metadata
+/// about the embed rather than tracked content. Centralizing the rule here
+/// keeps the two walkers in sync.
 pub(crate) fn is_skipped_entry(name: &OsStr) -> bool {
-    name == ".git" || name == SUBMODULE_FILE
+    name == ".git" || name == EMBED_FILE
 }
 
 /// Recursively copy a directory from `src` to `dst`, ignoring any `.git`

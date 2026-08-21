@@ -55,13 +55,15 @@ pub(crate) fn execute(args: AddArgs) -> Result<()> {
     let cwd = std::env::current_dir().context("failed to read current directory")?;
 
     // Validate the link and filter patterns before doing any I/O.
+    // `_repo_name` is unused: embeds are identified by folder path, not by a
+    // derived repo name, but `parse_repo_link` still validates it.
     let (link, _repo_name) = git::parse_repo_link(&args.link)?;
     let (folder_abs, _folder_rel) = paths::resolve_inside_root(&args.folder, &root, &cwd)?;
     let include = parse_patterns(&args.include);
     let exclude = parse_patterns(&args.exclude);
     let filter = Filter::from_patterns(&include, &exclude)?;
 
-    let config_path = paths::submodule_file_path(&folder_abs);
+    let config_path = paths::embed_file_path(&folder_abs);
     if config_path.exists() {
         bail!(
             "'{}' is already an embed ({} exists)",

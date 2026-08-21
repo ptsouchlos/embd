@@ -8,7 +8,7 @@ use crate::git;
 
 /// Name of the file `embd` stores inside each embedded folder, holding that
 /// embed's pinned metadata and file manifest.
-pub(crate) const SUBMODULE_FILE: &str = ".embd";
+pub(crate) const EMBED_FILE: &str = ".embd";
 
 /// Finds the git root of the current directory.
 pub(crate) fn find_git_root() -> Result<PathBuf> {
@@ -25,13 +25,18 @@ pub(crate) fn find_git_root() -> Result<PathBuf> {
 ///
 /// # Returns
 /// [`PathBuf`] to the folder's configuration file.
-pub(crate) fn submodule_file_path(folder: &Path) -> PathBuf {
-    folder.join(SUBMODULE_FILE)
+pub(crate) fn embed_file_path(folder: &Path) -> PathBuf {
+    folder.join(EMBED_FILE)
 }
 
-/// Walk the tree from `root`, skipping `.git`, and return every folder
-/// (relative to `root`) that directly contains a `.embd` submodule file.
-/// Sorted lexicographically for deterministic output.
+/// Walk the tree from `root`, skipping `.git` and other well-known
+/// non-source directories, and return every folder (relative to `root`) that
+/// directly contains a `.embd` embed file. Sorted lexicographically for
+/// deterministic output.
+///
+/// Once a folder's own `.embd` marker is found, its subtree is not recursed
+/// into any further — an embed's contents are never themselves walked
+/// looking for nested `.embd` files.
 ///
 /// # Arguments
 ///
@@ -39,7 +44,7 @@ pub(crate) fn submodule_file_path(folder: &Path) -> PathBuf {
 ///
 /// # Returns
 /// Sorted folder paths, each relative to `root`.
-pub(crate) fn discover_submodule_folders(root: &Path) -> Result<Vec<PathBuf>> {
+pub(crate) fn discover_embed_folders(root: &Path) -> Result<Vec<PathBuf>> {
     let mut out = Vec::new();
     discover_inner(root, Path::new(""), &mut out)?;
     out.sort();
@@ -56,7 +61,12 @@ fn discover_inner(root: &Path, relative: &Path, out: &mut Vec<PathBuf>) -> Resul
     for entry in read {
         let entry = entry?;
         let name = entry.file_name();
-        if name == ".git" {
+        if name == ".git"
+            || name == "target"
+            || name == "node_modules"
+            || name == ".worktrees"
+            || name == "worktrees"
+        {
             continue;
         }
         let file_type = entry
@@ -65,7 +75,7 @@ fn discover_inner(root: &Path, relative: &Path, out: &mut Vec<PathBuf>) -> Resul
         if file_type.is_symlink() {
             continue;
         }
-        if file_type.is_file() && name == SUBMODULE_FILE {
+        if file_type.is_file() && name == EMBED_FILE {
             has_marker = true;
             continue;
         }
@@ -75,10 +85,16 @@ fn discover_inner(root: &Path, relative: &Path, out: &mut Vec<PathBuf>) -> Resul
     }
 
     if has_marker {
-        out.push(relative.to_path_buf());
-    }
-    for sub in subdirs {
-        discover_inner(root, &sub, out)?;
+        // The git root itself is never a valid "embed folder" (there's no
+        // parent project to embed it into); silently skip it rather than
+        // reporting it as discovered.
+        if !relative.as_os_str().is_empty() {
+            out.push(relative.to_path_buf());
+        }
+    } else {
+        for sub in subdirs {
+            discover_inner(root, &sub, out)?;
+        }
     }
     Ok(())
 }
@@ -237,12 +253,9 @@ mod tests {
     }
 
     #[test]
-    fn submodule_file_path_is_dot_embd_inside_folder() {
+    fn embed_file_path_is_dot_embd_inside_folder() {
         let folder = Path::new("/repo/infra");
-        assert_eq!(
-            submodule_file_path(folder),
-            PathBuf::from("/repo/infra/.embd")
-        );
+        assert_eq!(embed_file_path(folder), PathBuf::from("/repo/infra/.embd"));
     }
 
     #[test]
@@ -254,7 +267,7 @@ mod tests {
         std::fs::create_dir_all(root.join("nested/alpha")).unwrap();
         std::fs::write(root.join("nested/alpha/.embd"), "x").unwrap();
 
-        let found = discover_submodule_folders(root).unwrap();
+        let found = discover_embed_folders(root).unwrap();
         assert_eq!(
             found,
             vec![
@@ -270,7 +283,7 @@ mod tests {
         let root = tmp.path();
         std::fs::create_dir_all(root.join(".git")).unwrap();
         std::fs::write(root.join(".git/.embd"), "x").unwrap();
-        let found = discover_submodule_folders(root).unwrap();
+        let found = discover_embed_folders(root).unwrap();
         assert!(found.is_empty());
     }
 
@@ -278,7 +291,46 @@ mod tests {
     fn discover_returns_empty_for_no_embeds() {
         let tmp = tempdir().unwrap();
         std::fs::create_dir_all(tmp.path().join("plain")).unwrap();
-        let found = discover_submodule_folders(tmp.path()).unwrap();
+        let found = discover_embed_folders(tmp.path()).unwrap();
+        assert!(found.is_empty());
+    }
+
+    #[test]
+    fn discover_skips_well_known_ignored_directories() {
+        let tmp = tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir_all(root.join("target")).unwrap();
+        std::fs::write(root.join("target/.embd"), "x").unwrap();
+        std::fs::create_dir_all(root.join("node_modules")).unwrap();
+        std::fs::write(root.join("node_modules/.embd"), "x").unwrap();
+        std::fs::create_dir_all(root.join(".worktrees")).unwrap();
+        std::fs::write(root.join(".worktrees/.embd"), "x").unwrap();
+        std::fs::create_dir_all(root.join("worktrees")).unwrap();
+        std::fs::write(root.join("worktrees/.embd"), "x").unwrap();
+
+        let found = discover_embed_folders(root).unwrap();
+        assert!(found.is_empty());
+    }
+
+    #[test]
+    fn discover_does_not_recurse_into_an_already_found_embed() {
+        let tmp = tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir_all(root.join("outer/inner")).unwrap();
+        std::fs::write(root.join("outer/.embd"), "x").unwrap();
+        std::fs::write(root.join("outer/inner/.embd"), "x").unwrap();
+
+        let found = discover_embed_folders(root).unwrap();
+        assert_eq!(found, vec![PathBuf::from("outer")]);
+    }
+
+    #[test]
+    fn discover_skips_embd_marker_at_git_root_itself() {
+        let tmp = tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::write(root.join(".embd"), "x").unwrap();
+
+        let found = discover_embed_folders(root).unwrap();
         assert!(found.is_empty());
     }
 }

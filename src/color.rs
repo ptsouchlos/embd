@@ -50,7 +50,7 @@ pub(crate) fn bad(s: &str) -> String {
     s.red().to_string()
 }
 
-/// Bold: entry headers (`name (folder)`).
+/// Bold: entry headers (the embed's folder path).
 pub(crate) fn header(s: &str) -> String {
     s.bold().to_string()
 }

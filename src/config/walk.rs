@@ -5,9 +5,9 @@ use anyhow::{Context, Result};
 use crate::{filesystem, filter::Filter};
 
 /// Walk a directory tree and return every regular file's path relative to
-/// `root`, sorted lexicographically. Skips `.git` directories, files rejected by
-/// `filter`, and silently ignores symlinks (the status walker reports symlinks
-/// separately).
+/// `root`, sorted lexicographically. Skips `.git` directories, the `.embd`
+/// marker file, files rejected by `filter`, and silently ignores symlinks
+/// (the status walker reports symlinks separately).
 pub(crate) fn walk_files(root: &Path, filter: &Filter) -> Result<Vec<PathBuf>> {
     let mut out = Vec::new();
     walk_files_inner(root, Path::new(""), filter, &mut out)?;
