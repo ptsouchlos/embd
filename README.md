@@ -4,8 +4,6 @@
 
 See the [design documentation](./docs/design.md) for more details on some of the differences between `embd` and `beman-submodule` as well as why those decisions were made.
 
-> **Breaking change:** `embd` used to store one config file for the whole project, at a root-level `.embd/embd.toml` (or, in older versions, `config.toml` + `embd.lock`). It now stores one `.embd` file per embedded folder instead — see [Configuration File](./docs/design.md#configuration-file). If `embd` detects a project still using the old root-level `.embd/` layout, it will now error instead of silently reporting nothing. There is no automated migration; convert existing entries to the new per-folder `.embd` file layout by hand.
-
 ## Installation
 
 Install the latest published release from [crates.io](https://crates.io/crates/embd-cli):
