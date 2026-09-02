@@ -29,7 +29,7 @@ cargo install --path .
 embd add -l <repo link>.git -f <local folder>
 ```
 
-This will clone the repository to the given folder and create an `embd.toml` file in the `.embd` folder. This file tracks both the pinned remote/commit for each embed and the hashes of the files it manages, and should be commited to VCS. You can also filter the contents of the repository using `-i` and `-e` flags. These use glob filters to include or exclude certain folders or files. For example, to exclude all Markdown and include all text files, you could the following:
+This will clone the repository to the given folder and create a `.embd` file inside it. This file tracks both the pinned remote/commit for the embed and the hashes of the files it manages, and should be commited to VCS. You can also filter the contents of the repository using `-i` and `-e` flags. These use glob filters to include or exclude certain folders or files. For example, to exclude all Markdown and include all text files, you could the following:
 
 ```bash
 embd add -l <repo> -f <folder> -i "**.txt" -e "**.md"
@@ -43,7 +43,7 @@ To update all embedded projects, run:
 embd update
 ```
 
-To update a specific project, use the name of the repo. This corresponds to the key of the projects entry in the `.embd/embd.toml` file:
+To update a specific project, use its folder path:
 
 ```bash
 embd update infra
@@ -55,7 +55,7 @@ To update a project to a new commit, tag or branch, use the `-r` or `--rev` flag
 embd update infra --rev abcd1234
 ```
 
-This will update the files on disk and update the commit hash and file manifest tracked for that project in `embd.toml`. Updates can also be forced using `--force` and untracked files can be removed using `--overwrite`. See `embd update -h` for more details.
+This will update the files on disk and update the commit hash and file manifest tracked for that project in its `.embd` file. Updates can also be forced using `--force` and untracked files can be removed using `--overwrite`. See `embd update -h` for more details.
 
 ### Check Status of Embeds
 

@@ -5,13 +5,11 @@ mod file_locks;
 mod hash;
 mod metadata;
 mod scan;
-mod store;
 mod walk;
 
 pub use entry::EmbdEntry;
 pub use file_locks::FileLocks;
 pub use metadata::Metadata;
-pub use store::{Config, load_or_default};
 
 pub(crate) use hash::hash_file;
 pub(crate) use scan::{EntryReport, EntryState, FileChange, inspect_entry, scan_folder};

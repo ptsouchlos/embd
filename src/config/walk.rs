@@ -5,9 +5,9 @@ use anyhow::{Context, Result};
 use crate::{filesystem, filter::Filter};
 
 /// Walk a directory tree and return every regular file's path relative to
-/// `root`, sorted lexicographically. Skips `.git` directories, files rejected by
-/// `filter`, and silently ignores symlinks (the status walker reports symlinks
-/// separately).
+/// `root`, sorted lexicographically. Skips `.git` directories, the `.embd`
+/// marker file, files rejected by `filter`, and silently ignores symlinks
+/// (the status walker reports symlinks separately).
 pub(crate) fn walk_files(root: &Path, filter: &Filter) -> Result<Vec<PathBuf>> {
     let mut out = Vec::new();
     walk_files_inner(root, Path::new(""), filter, &mut out)?;
@@ -78,6 +78,15 @@ mod tests {
         let dir = tempdir().unwrap();
         std::fs::create_dir_all(dir.path().join(".git")).unwrap();
         std::fs::write(dir.path().join(".git/HEAD"), "x").unwrap();
+        std::fs::write(dir.path().join("keep.txt"), "k").unwrap();
+        let files = walk_files(dir.path(), &Filter::allow_all()).unwrap();
+        assert_eq!(files, vec![PathBuf::from("keep.txt")]);
+    }
+
+    #[test]
+    fn walk_files_skips_embd_marker() {
+        let dir = tempdir().unwrap();
+        std::fs::write(dir.path().join(".embd"), "marker").unwrap();
         std::fs::write(dir.path().join("keep.txt"), "k").unwrap();
         let files = walk_files(dir.path(), &Filter::allow_all()).unwrap();
         assert_eq!(files, vec![PathBuf::from("keep.txt")]);

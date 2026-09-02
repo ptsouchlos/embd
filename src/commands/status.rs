@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 
 use crate::color;
 use crate::commands::common::select_entries;
@@ -7,8 +7,8 @@ use crate::paths;
 
 #[derive(clap::Args, Debug)]
 pub(crate) struct StatusArgs {
-    /// Optional names to check. When empty, all embeds in the config are checked.
-    names: Vec<String>,
+    /// Optional folder paths to check. When empty, every embed in the project is checked.
+    folders: Vec<String>,
     /// Suppress per-file rows; print only one-line summaries per entry.
     #[clap(short, long)]
     quiet: bool,
@@ -16,13 +16,12 @@ pub(crate) struct StatusArgs {
 
 pub(crate) fn execute(args: StatusArgs) -> Result<()> {
     let root = paths::find_git_root()?;
-    let config_path = paths::config_path(&root);
-    let config = config::load_or_default(&config_path)?;
-    let selected = select_entries(&config, &args.names)?;
+    let cwd = std::env::current_dir().context("failed to read current directory")?;
+    let selected = select_entries(&root, &args.folders, &cwd)?;
 
     let mut any_drift = false;
-    for (name, entry) in selected {
-        let report = config::inspect_entry(&root, name, entry);
+    for (folder, entry) in &selected {
+        let report = config::inspect_entry(&root, folder, entry);
         any_drift |= report.has_drift();
         print_report(&report, args.quiet);
     }
@@ -36,7 +35,7 @@ pub(crate) fn execute(args: StatusArgs) -> Result<()> {
 pub(crate) fn print_report(report: &EntryReport, quiet: bool) {
     use anstream::println;
 
-    let header = color::header(&format!("{} ({})", report.name, report.folder.display()));
+    let header = color::header(&report.folder.display().to_string());
 
     match report.state {
         EntryState::FolderMissing => {

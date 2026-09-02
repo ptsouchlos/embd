@@ -35,8 +35,7 @@ impl FileChange {
 /// Aggregate report for a single entry. `Compared` and `FolderMissing` are
 /// mutually exclusive.
 #[derive(Debug)]
-pub(crate) struct EntryReport<'a> {
-    pub name: &'a str,
+pub(crate) struct EntryReport {
     pub folder: PathBuf,
     pub state: EntryState,
     pub changes: Vec<FileChange>,
@@ -51,7 +50,7 @@ pub(crate) enum EntryState {
     FolderMissing,
 }
 
-impl EntryReport<'_> {
+impl EntryReport {
     pub(crate) fn has_drift(&self) -> bool {
         match self.state {
             EntryState::FolderMissing => true,
@@ -74,11 +73,10 @@ pub(crate) enum DiskEntry {
     Symlink,
 }
 
-pub(crate) fn inspect_entry<'a>(root: &Path, name: &'a str, entry: &EmbdEntry) -> EntryReport<'a> {
-    let folder_abs = root.join(&entry.metadata.folder);
+pub(crate) fn inspect_entry(root: &Path, folder: &Path, entry: &EmbdEntry) -> EntryReport {
+    let folder_abs = root.join(folder);
     let mut report = EntryReport {
-        name,
-        folder: entry.metadata.folder.clone(),
+        folder: folder.to_path_buf(),
         state: EntryState::Compared,
         changes: Vec::new(),
         allow_untracked: entry.metadata.allow_untracked,
@@ -95,7 +93,7 @@ pub(crate) fn inspect_entry<'a>(root: &Path, name: &'a str, entry: &EmbdEntry) -
             anstream::eprintln!(
                 "{} failed to scan folder for '{}': {}",
                 color::warning_label(),
-                name,
+                folder.display(),
                 e
             );
             report.state = EntryState::FolderMissing;
@@ -213,10 +211,7 @@ mod tests {
     /// Builds a folder under a fresh temp root with the given files, and an
     /// [`EmbdEntry`] whose `files` manifest is hashed from that folder — i.e.
     /// a "just synced" entry with no drift.
-    fn fixture(
-        commit: &str,
-        files: &[(&str, &str)],
-    ) -> (tempfile::TempDir, PathBuf, String, EmbdEntry) {
+    fn fixture(commit: &str, files: &[(&str, &str)]) -> (tempfile::TempDir, PathBuf, EmbdEntry) {
         let dir = tempdir().unwrap();
         let root = dir.path().to_path_buf();
         let folder = root.join("vendor/foo");
@@ -233,20 +228,19 @@ mod tests {
             metadata: Metadata {
                 remote: "https://example.git".into(),
                 commit_hash: commit.into(),
-                folder: PathBuf::from("vendor/foo"),
                 allow_untracked: false,
                 include: Vec::new(),
                 exclude: Vec::new(),
             },
             files: locked_files,
         };
-        (dir, root, "foo".into(), entry)
+        (dir, root, entry)
     }
 
     #[test]
     fn reports_clean_when_folder_matches_manifest() {
-        let (_dir, root, name, entry) = fixture("abc123", &[("a.txt", "alpha")]);
-        let report = inspect_entry(&root, &name, &entry);
+        let (_dir, root, entry) = fixture("abc123", &[("a.txt", "alpha")]);
+        let report = inspect_entry(&root, Path::new("vendor/foo"), &entry);
         assert_eq!(report.state, EntryState::Compared);
         assert!(report.changes.is_empty());
         assert!(!report.has_drift());
@@ -254,27 +248,27 @@ mod tests {
 
     #[test]
     fn reports_modified_file() {
-        let (_dir, root, name, entry) = fixture("abc123", &[("a.txt", "alpha")]);
+        let (_dir, root, entry) = fixture("abc123", &[("a.txt", "alpha")]);
         fs::write(root.join("vendor/foo/a.txt"), "ALPHA").unwrap();
-        let report = inspect_entry(&root, &name, &entry);
+        let report = inspect_entry(&root, Path::new("vendor/foo"), &entry);
         assert_eq!(report.changes, vec![FileChange::Modified("a.txt".into())]);
         assert!(report.has_drift());
     }
 
     #[test]
     fn reports_deleted_file() {
-        let (_dir, root, name, entry) = fixture("abc123", &[("a.txt", "alpha"), ("b.txt", "beta")]);
+        let (_dir, root, entry) = fixture("abc123", &[("a.txt", "alpha"), ("b.txt", "beta")]);
         fs::remove_file(root.join("vendor/foo/a.txt")).unwrap();
-        let report = inspect_entry(&root, &name, &entry);
+        let report = inspect_entry(&root, Path::new("vendor/foo"), &entry);
         assert_eq!(report.changes, vec![FileChange::Deleted("a.txt".into())]);
         assert!(report.has_drift());
     }
 
     #[test]
     fn untracked_is_drift_when_flag_off() {
-        let (_dir, root, name, entry) = fixture("abc123", &[("a.txt", "alpha")]);
+        let (_dir, root, entry) = fixture("abc123", &[("a.txt", "alpha")]);
         fs::write(root.join("vendor/foo/extra.txt"), "x").unwrap();
-        let report = inspect_entry(&root, &name, &entry);
+        let report = inspect_entry(&root, Path::new("vendor/foo"), &entry);
         assert_eq!(
             report.changes,
             vec![FileChange::Untracked("extra.txt".into())]
@@ -284,10 +278,10 @@ mod tests {
 
     #[test]
     fn untracked_is_clean_when_flag_on() {
-        let (_dir, root, name, mut entry) = fixture("abc123", &[("a.txt", "alpha")]);
+        let (_dir, root, mut entry) = fixture("abc123", &[("a.txt", "alpha")]);
         entry.metadata.allow_untracked = true;
         fs::write(root.join("vendor/foo/extra.txt"), "x").unwrap();
-        let report = inspect_entry(&root, &name, &entry);
+        let report = inspect_entry(&root, Path::new("vendor/foo"), &entry);
         assert_eq!(
             report.changes,
             vec![FileChange::Untracked("extra.txt".into())]
@@ -297,11 +291,11 @@ mod tests {
 
     #[test]
     fn modified_overrides_allow_untracked() {
-        let (_dir, root, name, mut entry) = fixture("abc123", &[("a.txt", "alpha")]);
+        let (_dir, root, mut entry) = fixture("abc123", &[("a.txt", "alpha")]);
         entry.metadata.allow_untracked = true;
         fs::write(root.join("vendor/foo/a.txt"), "ALPHA").unwrap();
         fs::write(root.join("vendor/foo/extra.txt"), "x").unwrap();
-        let report = inspect_entry(&root, &name, &entry);
+        let report = inspect_entry(&root, Path::new("vendor/foo"), &entry);
         assert!(
             report.has_drift(),
             "modified file must always count as drift"
@@ -313,29 +307,29 @@ mod tests {
         // Simulates a manifest built from an LF checkout (e.g. on Linux/macOS)
         // being checked with a CRLF-converted working tree (e.g. Windows'
         // default core.autocrlf checkout behavior).
-        let (_dir, root, name, entry) = fixture("abc123", &[("a.txt", "alpha\nbeta\n")]);
+        let (_dir, root, entry) = fixture("abc123", &[("a.txt", "alpha\nbeta\n")]);
         fs::write(root.join("vendor/foo/a.txt"), "alpha\r\nbeta\r\n").unwrap();
-        let report = inspect_entry(&root, &name, &entry);
+        let report = inspect_entry(&root, Path::new("vendor/foo"), &entry);
         assert!(report.changes.is_empty(), "{:?}", report.changes);
         assert!(!report.has_drift());
     }
 
     #[test]
     fn folder_missing_reports_drift() {
-        let (_dir, root, name, entry) = fixture("abc123", &[("a.txt", "alpha")]);
+        let (_dir, root, entry) = fixture("abc123", &[("a.txt", "alpha")]);
         fs::remove_dir_all(root.join("vendor/foo")).unwrap();
-        let report = inspect_entry(&root, &name, &entry);
+        let report = inspect_entry(&root, Path::new("vendor/foo"), &entry);
         assert_eq!(report.state, EntryState::FolderMissing);
         assert!(report.has_drift());
     }
 
     #[test]
     fn change_ordering_is_stable() {
-        let (_dir, root, name, entry) = fixture("abc123", &[("a.txt", "alpha"), ("b.txt", "beta")]);
+        let (_dir, root, entry) = fixture("abc123", &[("a.txt", "alpha"), ("b.txt", "beta")]);
         fs::write(root.join("vendor/foo/b.txt"), "BETA").unwrap();
         fs::remove_file(root.join("vendor/foo/a.txt")).unwrap();
         fs::write(root.join("vendor/foo/z.txt"), "z").unwrap();
-        let report = inspect_entry(&root, &name, &entry);
+        let report = inspect_entry(&root, Path::new("vendor/foo"), &entry);
         assert_eq!(
             report.changes,
             vec![
@@ -350,11 +344,21 @@ mod tests {
     #[test]
     fn symlink_reported_as_drift() {
         use std::os::unix::fs::symlink;
-        let (_dir, root, name, mut entry) = fixture("abc123", &[("a.txt", "alpha")]);
+        let (_dir, root, mut entry) = fixture("abc123", &[("a.txt", "alpha")]);
         entry.metadata.allow_untracked = true;
         symlink("a.txt", root.join("vendor/foo/link.txt")).unwrap();
-        let report = inspect_entry(&root, &name, &entry);
+        let report = inspect_entry(&root, Path::new("vendor/foo"), &entry);
         assert_eq!(report.changes, vec![FileChange::Symlink("link.txt".into())]);
         assert!(report.has_drift());
+    }
+
+    #[test]
+    fn scan_folder_skips_embd_marker() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join(".embd"), "marker").unwrap();
+        fs::write(dir.path().join("keep.txt"), "k").unwrap();
+        let scanned = scan_folder(dir.path()).unwrap();
+        assert!(scanned.contains_key("keep.txt"));
+        assert!(!scanned.contains_key(".embd"));
     }
 }
