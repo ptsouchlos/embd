@@ -11,10 +11,24 @@ use crate::{filesystem, git, paths};
 /// Input arguments for the `add` command.
 #[derive(clap::Args, Debug)]
 pub(crate) struct AddArgs {
+    #[arg(
+        value_name = "LINK",
+        help = "Link to the repository",
+        required_unless_present = "link",
+        conflicts_with = "link"
+    )]
+    link_pos: Option<String>,
+    #[arg(
+        value_name = "PATH",
+        help = "Path to pull the files to",
+        required_unless_present = "folder",
+        conflicts_with = "folder"
+    )]
+    folder_pos: Option<PathBuf>,
     #[clap(short, long, help = "Link to the repository")]
-    link: String,
+    link: Option<String>,
     #[clap(short, long, help = "Path to pull the files to")]
-    folder: PathBuf,
+    folder: Option<PathBuf>,
     #[clap(
         short,
         long,
@@ -37,6 +51,18 @@ pub(crate) struct AddArgs {
     exclude: Option<String>,
 }
 
+impl AddArgs {
+    fn link(&self) -> &str {
+        // clap has already guaranteed exactly one of these is set
+        self.link_pos.as_deref().or(self.link.as_deref()).unwrap()
+    }
+    fn folder(&self) -> &Path {
+        self.folder_pos
+            .as_deref()
+            .or(self.folder.as_deref())
+            .unwrap()
+    }
+}
 /// Split a comma-separated pattern argument into a list of trimmed, non-empty
 /// patterns. `None` and the empty string both yield an empty list. This is used to
 /// parse include/exclude patterns from the command line input from the user.
@@ -57,8 +83,8 @@ pub(crate) fn execute(args: AddArgs) -> Result<()> {
     // Validate the link and filter patterns before doing any I/O.
     // `_repo_name` is unused: embeds are identified by folder path, not by a
     // derived repo name, but `parse_repo_link` still validates it.
-    let (link, _repo_name) = git::parse_repo_link(&args.link)?;
-    let (folder_abs, _folder_rel) = paths::resolve_inside_root(&args.folder, &root, &cwd)?;
+    let (link, _repo_name) = git::parse_repo_link(args.link())?;
+    let (folder_abs, _folder_rel) = paths::resolve_inside_root(args.folder(), &root, &cwd)?;
     let include = parse_patterns(&args.include);
     let exclude = parse_patterns(&args.exclude);
     let filter = Filter::from_patterns(&include, &exclude)?;
@@ -67,7 +93,7 @@ pub(crate) fn execute(args: AddArgs) -> Result<()> {
     if config_path.exists() {
         bail!(
             "'{}' is already an embed ({} exists)",
-            args.folder.display(),
+            args.folder().display(),
             config_path.display()
         );
     }
@@ -80,7 +106,7 @@ pub(crate) fn execute(args: AddArgs) -> Result<()> {
         if entries.next().is_some() {
             bail!(
                 "folder '{}' is non-empty; use --allow-untracked to proceed anyway",
-                args.folder.display()
+                args.folder().display()
             );
         }
     }
