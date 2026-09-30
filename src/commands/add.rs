@@ -11,10 +11,27 @@ use crate::{filesystem, git, paths};
 /// Input arguments for the `add` command.
 #[derive(clap::Args, Debug)]
 pub(crate) struct AddArgs {
+    #[arg(
+        value_name = "LINK",
+        help = "Link to the repository",
+        required_unless_present = "link",
+        conflicts_with = "link"
+    )]
+    link_pos: Option<String>,
+    #[arg(
+        value_name = "PATH",
+        help = "Path to pull the files to [default: repository name]",
+        conflicts_with = "folder"
+    )]
+    folder_pos: Option<PathBuf>,
     #[clap(short, long, help = "Link to the repository")]
-    link: String,
-    #[clap(short, long, help = "Path to pull the files to")]
-    folder: PathBuf,
+    link: Option<String>,
+    #[clap(
+        short,
+        long,
+        help = "Path to pull the files to [default: repository name]"
+    )]
+    folder: Option<PathBuf>,
     #[clap(
         short,
         long,
@@ -37,6 +54,22 @@ pub(crate) struct AddArgs {
     exclude: Option<String>,
 }
 
+impl AddArgs {
+    fn link(&self) -> &str {
+        // clap has already guaranteed exactly one of these is set
+        self.link_pos.as_deref().or(self.link.as_deref()).unwrap()
+    }
+    /// Like `git submodule add`, the folder defaults to the repository name
+    /// (relative to the current directory) when neither form is given.
+    fn folder_or(&self, repo_name: &str) -> PathBuf {
+        self.folder_pos
+            .as_deref()
+            .or(self.folder.as_deref())
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from(repo_name))
+    }
+}
+
 /// Split a comma-separated pattern argument into a list of trimmed, non-empty
 /// patterns. `None` and the empty string both yield an empty list. This is used to
 /// parse include/exclude patterns from the command line input from the user.
@@ -55,10 +88,11 @@ pub(crate) fn execute(args: AddArgs) -> Result<()> {
     let cwd = std::env::current_dir().context("failed to read current directory")?;
 
     // Validate the link and filter patterns before doing any I/O.
-    // `_repo_name` is unused: embeds are identified by folder path, not by a
-    // derived repo name, but `parse_repo_link` still validates it.
-    let (link, _repo_name) = git::parse_repo_link(&args.link)?;
-    let (folder_abs, _folder_rel) = paths::resolve_inside_root(&args.folder, &root, &cwd)?;
+    // Embeds are identified by folder path; the repo name is only used as the
+    // default folder when none is given.
+    let (link, repo_name) = git::parse_repo_link(args.link())?;
+    let folder = args.folder_or(&repo_name);
+    let (folder_abs, _folder_rel) = paths::resolve_inside_root(&folder, &root, &cwd)?;
     let include = parse_patterns(&args.include);
     let exclude = parse_patterns(&args.exclude);
     let filter = Filter::from_patterns(&include, &exclude)?;
@@ -67,7 +101,7 @@ pub(crate) fn execute(args: AddArgs) -> Result<()> {
     if config_path.exists() {
         bail!(
             "'{}' is already an embed ({} exists)",
-            args.folder.display(),
+            folder.display(),
             config_path.display()
         );
     }
@@ -80,7 +114,7 @@ pub(crate) fn execute(args: AddArgs) -> Result<()> {
         if entries.next().is_some() {
             bail!(
                 "folder '{}' is non-empty; use --allow-untracked to proceed anyway",
-                args.folder.display()
+                folder.display()
             );
         }
     }
@@ -153,5 +187,58 @@ fn rollback(folder: &Path, folder_existed: bool, allow_untracked: bool) {
             folder.display(),
             e
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    #[derive(Parser, Debug)]
+    struct Cli {
+        #[command(flatten)]
+        args: AddArgs,
+    }
+
+    fn parse(argv: &[&str]) -> Result<AddArgs, clap::Error> {
+        Cli::try_parse_from(std::iter::once("add").chain(argv.iter().copied())).map(|c| c.args)
+    }
+
+    const URL: &str = "https://github.com/foo/bar.git";
+
+    #[test]
+    fn positional_link_and_folder() {
+        let args = parse(&[URL, "vendor/bar"]).unwrap();
+        assert_eq!(args.link(), URL);
+        assert_eq!(args.folder_or("bar"), PathBuf::from("vendor/bar"));
+    }
+
+    #[test]
+    fn flag_link_and_folder() {
+        let args = parse(&["-l", URL, "-f", "vendor/bar"]).unwrap();
+        assert_eq!(args.link(), URL);
+        assert_eq!(args.folder_or("bar"), PathBuf::from("vendor/bar"));
+    }
+
+    #[test]
+    fn folder_defaults_to_repo_name() {
+        let args = parse(&[URL]).unwrap();
+        assert_eq!(args.folder_or("bar"), PathBuf::from("bar"));
+
+        let args = parse(&["-l", URL]).unwrap();
+        assert_eq!(args.folder_or("bar"), PathBuf::from("bar"));
+    }
+
+    #[test]
+    fn missing_link_is_an_error() {
+        assert!(parse(&[]).is_err());
+        assert!(parse(&["-f", "vendor/bar"]).is_err());
+    }
+
+    #[test]
+    fn positional_and_flag_conflict() {
+        assert!(parse(&[URL, "-l", URL]).is_err());
+        assert!(parse(&[URL, "vendor/bar", "-f", "vendor/bar"]).is_err());
     }
 }
