@@ -26,13 +26,15 @@ cargo install --path .
 ### Embed a Repository
 
 ```bash
+embd add <repo link>.git [<local folder>]
+# or, equivalently
 embd add -l <repo link>.git -f <local folder>
 ```
 
-This will clone the repository to the given folder and create a `.embd` file inside it. This file tracks both the pinned remote/commit for the embed and the hashes of the files it manages, and should be commited to VCS. You can also filter the contents of the repository using `-i` and `-e` flags. These use glob filters to include or exclude certain folders or files. For example, to exclude all Markdown and include all text files, you could the following:
+Like `git submodule add`, the folder is optional and defaults to the repository name (relative to the current directory). This will clone the repository to the given folder and create a `.embd` file inside it. This file tracks both the pinned remote/commit for the embed and the hashes of the files it manages, and should be commited to VCS. You can also filter the contents of the repository using `-i` and `-e` flags. These use glob filters to include or exclude certain folders or files. For example, to exclude all Markdown and include all text files, you could the following:
 
 ```bash
-embd add -l <repo> -f <folder> -i "**.txt" -e "**.md"
+embd add <repo> <folder> -i "**.txt" -e "**.md"
 ```
 
 ### Update embeds
