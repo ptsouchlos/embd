@@ -1,0 +1,27 @@
+name: Update infra
+
+on:
+  repository_dispatch:
+    types: [infra-release]
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+concurrency: infra-update
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - id: app
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ vars.INFRA_BOT_APP_ID }}
+          private-key: ${{ secrets.INFRA_BOT_PRIVATE_KEY }}
+      - uses: actions/checkout@v7
+        with:
+          token: ${{ steps.app.outputs.token }}
+      - uses: ptsouchlos/infra/.github/actions/update-infra@v1
+        with:
+          token: ${{ steps.app.outputs.token }}
+          tag: ${{ github.event.client_payload.tag }}
