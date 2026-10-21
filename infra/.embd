@@ -1,6 +1,6 @@
 [metadata]
 remote = "git@github.com:ptsouchlos/infra.git"
-commit_hash = "c5296173ff33d011734c9a05f923cfd065f86af8"
+commit_hash = "a0704de6951a40145ffef95361443bff96f43156"
 allow_untracked = false
 include = [
     "just/**",
