@@ -7,7 +7,7 @@ use tempfile::tempdir;
 use crate::color;
 use crate::commands::common::select_entries;
 use crate::commands::status::print_report;
-use crate::config::{self, EmbdEntry, EntryState, FileChange, FileLocks};
+use crate::config::{self, EmbdEntry, EntryState, FileChange, FileLocks, Tracking};
 use crate::filter::Filter;
 use crate::{git, paths};
 
@@ -19,6 +19,9 @@ pub(crate) struct UpdateArgs {
     /// Requires exactly one folder.
     #[clap(short, long)]
     rev: Option<String>,
+    /// Advance branch-tracking embeds to the latest commit on their tracked branch.
+    #[clap(long, conflicts_with = "rev")]
+    remote: bool,
     /// Overwrite local modifications to tracked files. Untracked files are
     /// preserved by default; combine with --overwrite to remove them too.
     #[clap(long)]
@@ -80,12 +83,26 @@ enum Outcome {
         new_commit: String,
         changes: Vec<UpdateChange>,
     },
+    /// The entry is pinned to a tag; `--remote` does not advance it.
+    PinnedToTag(String),
+    /// The entry has no tracking ref, so `--remote` cannot advance it.
+    NoTracking,
 }
 
 impl Outcome {
     fn is_failure(&self) -> bool {
         matches!(self, Outcome::SkippedDrift)
     }
+}
+
+/// What `process_entry` is doing with this entry, resolved up front.
+enum Target<'a> {
+    /// Apply the pinned revision; the pin does not move.
+    Resync(&'a str),
+    /// Advance the pin to a named revision (may move the pin).
+    Rev(&'a str),
+    /// Advance the pin to the latest commit on the tracked branch.
+    Branch(&'a str),
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -115,9 +132,23 @@ fn process_entry(
     let config_path = paths::embed_file_path(&root.join(folder));
     let report = config::inspect_entry(root, folder, &entry);
 
-    // Short-circuit no-op: only safe when no --rev was requested. With --rev we
-    // must still resolve the ref to know whether it changes the pin.
-    if args.rev.is_none() && report.state == EntryState::Compared && report.changes.is_empty() {
+    // Resolve what this run is doing before touching the network or disk.
+    let target: Target = if args.remote {
+        match &entry.metadata.tracking {
+            Some(Tracking::Tag(tag)) => return Ok(Outcome::PinnedToTag(tag.clone())),
+            Some(Tracking::Branch(branch)) => Target::Branch(branch),
+            None => return Ok(Outcome::NoTracking),
+        }
+    } else if let Some(rev) = &args.rev {
+        Target::Rev(rev)
+    } else {
+        Target::Resync(&entry.metadata.commit_hash)
+    };
+    let moves_pin = !matches!(target, Target::Resync(_));
+
+    // Short-circuit no-op: only safe when the pin does not move. With a pin
+    // bump we must still resolve the ref to know whether it changes the pin.
+    if !moves_pin && report.state == EntryState::Compared && report.changes.is_empty() {
         return Ok(Outcome::UpToDate);
     }
 
@@ -133,17 +164,52 @@ fn process_entry(
         return Ok(Outcome::SkippedDrift);
     }
 
-    // Clone the target rev to a tempdir and resolve to a concrete commit.
-    // Always full clone: the rev we check out may be any historical commit
-    // (entry.commit_hash for re-sync, or args.rev for a bump), not HEAD.
+    // Clone the target rev to a tempdir and resolve it to a concrete commit.
     let tmp = tempdir().context("failed to create temporary directory")?;
-    git::cli::clone(&entry.metadata.remote, tmp.path(), false)?;
-    let rev_to_checkout = args.rev.as_ref().unwrap_or(&entry.metadata.commit_hash);
-    git::cli::checkout(tmp.path(), rev_to_checkout.clone())?;
-    let new_commit = git::cli::commit_hash_of(tmp.path())?;
+    let (new_commit, tracking) = match target {
+        Target::Branch(branch) => {
+            // Ask upstream where the tracked branch currently points.
+            let head = match git::cli::ls_remote_head(&entry.metadata.remote, branch)? {
+                Some(head) => head,
+                None => bail!(
+                    "branch '{}' is gone upstream on {}; re-pin with `embd update {} --rev <ref>`",
+                    branch,
+                    entry.metadata.remote,
+                    folder.display()
+                ),
+            };
+            // Fast path: the branch tip is the pin itself and the tree is clean,
+            // so nothing has moved. Skip the clone.
+            if head == entry.metadata.commit_hash
+                && report.state == EntryState::Compared
+                && report.changes.is_empty()
+            {
+                return Ok(Outcome::UpToDate);
+            }
+            // Shallow clone straight at the branch tip: no checkout, no re-classify.
+            git::cli::clone(&entry.metadata.remote, tmp.path(), true, Some(branch))?;
+            (
+                git::cli::commit_hash_of(tmp.path())?,
+                Some(Tracking::Branch(branch.to_string())),
+            )
+        }
+        Target::Resync(rev) | Target::Rev(rev) => {
+            // Always full clone: the rev checked out may be any historical
+            // commit (the pin for re-sync, or a named rev for a bump).
+            git::cli::clone(&entry.metadata.remote, tmp.path(), false, None)?;
+            git::cli::checkout(tmp.path(), rev.to_string())?;
+            // Re-classify only when the pin moves; otherwise keep what we recorded.
+            let tracking = if moves_pin {
+                git::cli::classify_head(tmp.path(), Some(rev))?
+            } else {
+                entry.metadata.tracking.clone()
+            };
+            (git::cli::commit_hash_of(tmp.path())?, tracking)
+        }
+    };
 
-    // If --rev resolved to the existing pin and there's no drift, this is also a no-op.
-    if args.rev.is_some()
+    // If a bump resolved back to the existing pin with a clean tree, no-op.
+    if moves_pin
         && new_commit == entry.metadata.commit_hash
         && report.state == EntryState::Compared
         && report.changes.is_empty()
@@ -160,11 +226,12 @@ fn process_entry(
 
     let old_commit = entry.metadata.commit_hash.clone();
 
-    // Save config first when --rev moves the pin, before the file manifest
-    // catches up. Durable pin is the source of truth; a crash after this point
-    // is recoverable via `update --force`.
-    if args.rev.is_some() && new_commit != entry.metadata.commit_hash {
+    // Save config first when the pin moves, before the file manifest catches
+    // up. Durable pin is the source of truth; a crash after this point is
+    // recoverable via `update --force`.
+    if moves_pin && new_commit != entry.metadata.commit_hash {
         entry.metadata.commit_hash = new_commit.clone();
+        entry.metadata.tracking = tracking;
         entry.save(&config_path)?;
     }
 
@@ -339,6 +406,18 @@ fn print_outcome(folder: &Path, outcome: &Outcome, quiet: bool) {
     let header = color::header(&folder.display().to_string());
     match outcome {
         Outcome::UpToDate => println!("{header}: {}", color::ok("up to date")),
+        Outcome::PinnedToTag(tag) => {
+            println!(
+                "{header}: {}",
+                color::warn(&format!("pinned to tag {tag}; nothing to advance"))
+            );
+        }
+        Outcome::NoTracking => {
+            println!(
+                "{header}: {}",
+                color::warn("no tracking ref; re-pin with `embd update <folder> --rev <branch>`")
+            );
+        }
         Outcome::SkippedDrift => {
             // The detailed diff was already printed via print_report. Add a trailing
             // hint so the user knows what to do.
@@ -383,8 +462,10 @@ fn print_outcome(folder: &Path, outcome: &Outcome, quiet: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::git::test_support::{git, git_stdout, test_repo};
+    use clap::Parser;
     use std::fs;
-    use tempfile::tempdir;
+    use tempfile::{TempDir, tempdir};
 
     fn write(path: &Path, contents: &str) {
         if let Some(parent) = path.parent() {
@@ -566,5 +647,200 @@ mod tests {
             .collect();
         assert!(wrote_keys.contains(&"a.txt"));
         assert!(wrote_keys.contains(&"b.txt"));
+    }
+
+    struct Fixture {
+        _repo_tmp: TempDir,
+        _root_tmp: TempDir,
+        repo: PathBuf,
+        root: PathBuf,
+    }
+
+    impl Fixture {
+        fn embedded(pin_ref: &str, tracking: Option<Tracking>, files: &[(&str, &str)]) -> Fixture {
+            let (_repo_tmp, repo) = test_repo();
+            let spec = format!("{pin_ref}^{{commit}}");
+            let pin = git_stdout(&repo, &["rev-parse", &spec]);
+            let root_tmp = tempdir().unwrap();
+            let root = root_tmp.path().to_path_buf();
+            let folder = root.join("myembed");
+            for (name, contents) in files {
+                write(&folder.join(name), contents);
+            }
+            let entry = EmbdEntry {
+                metadata: config::Metadata {
+                    remote: format!("file://{repo}", repo = repo.display()),
+                    commit_hash: pin,
+                    tracking,
+                    allow_untracked: false,
+                    include: vec![],
+                    exclude: vec![],
+                },
+                files: FileLocks::build_from_path(&folder).unwrap(),
+            };
+            entry.save(&paths::embed_file_path(&folder)).unwrap();
+            Fixture {
+                _repo_tmp,
+                _root_tmp: root_tmp,
+                repo,
+                root,
+            }
+        }
+
+        fn folder(&self) -> PathBuf {
+            self.root.join("myembed")
+        }
+    }
+
+    fn args(rev: Option<&str>, remote: bool) -> UpdateArgs {
+        UpdateArgs {
+            folders: vec![],
+            rev: rev.map(String::from),
+            remote,
+            force: false,
+            overwrite: false,
+            quiet: true,
+        }
+    }
+
+    #[test]
+    fn remote_conflicts_with_rev() {
+        #[derive(Debug, clap::Parser)]
+        struct Cli {
+            #[clap(flatten)]
+            update: UpdateArgs,
+        }
+        let ok = Cli::try_parse_from(["embd", "--remote"]).unwrap();
+        assert!(ok.update.remote);
+        let err = Cli::try_parse_from(["embd", "--rev", "v1.0", "--remote"]).unwrap_err();
+        assert!(err.to_string().contains("cannot be used with"), "{err}");
+    }
+
+    #[test]
+    fn remote_advances_branch_tracking_embed_to_branch_tip() {
+        let f = Fixture::embedded(
+            "main",
+            Some(Tracking::Branch("main".into())),
+            &[("a.txt", "alpha")],
+        );
+        write(&f.repo.join("c.txt"), "gamma");
+        git(&f.repo, &["add", "c.txt"]);
+        git(&f.repo, &["commit", "-q", "-m", "commit 3"]);
+        let tip = git_stdout(&f.repo, &["rev-parse", "main^{commit}"]);
+
+        let entry = EmbdEntry::load(&paths::embed_file_path(&f.folder())).unwrap();
+        let outcome =
+            process_entry(&f.root, Path::new("myembed"), entry, &args(None, true)).unwrap();
+
+        match outcome {
+            Outcome::Updated { new_commit, .. } => assert_eq!(new_commit, tip),
+            other => panic!("expected Updated, got {other:?}"),
+        }
+        assert_eq!(
+            fs::read_to_string(f.folder().join("c.txt")).unwrap(),
+            "gamma"
+        );
+        assert_eq!(
+            fs::read_to_string(f.folder().join("a.txt")).unwrap(),
+            "alpha"
+        );
+        let saved = EmbdEntry::load(&paths::embed_file_path(&f.folder())).unwrap();
+        assert_eq!(saved.metadata.commit_hash, tip);
+        assert_eq!(
+            saved.metadata.tracking,
+            Some(Tracking::Branch("main".into()))
+        );
+    }
+
+    #[test]
+    fn remote_leaves_tag_pinned_embed_untouched() {
+        let f = Fixture::embedded(
+            "v1.0",
+            Some(Tracking::Tag("v1.0".into())),
+            &[("a.txt", "alpha")],
+        );
+        write(&f.repo.join("c.txt"), "gamma");
+        git(&f.repo, &["add", "c.txt"]);
+        git(&f.repo, &["commit", "-q", "-m", "commit 3"]);
+        let pin = git_stdout(&f.repo, &["rev-parse", "v1.0^{commit}"]);
+
+        let entry = EmbdEntry::load(&paths::embed_file_path(&f.folder())).unwrap();
+        let outcome =
+            process_entry(&f.root, Path::new("myembed"), entry, &args(None, true)).unwrap();
+        assert!(matches!(outcome, Outcome::PinnedToTag(ref tag) if tag == "v1.0"));
+
+        let saved = EmbdEntry::load(&paths::embed_file_path(&f.folder())).unwrap();
+        assert_eq!(saved.metadata.commit_hash, pin);
+        assert_eq!(saved.metadata.tracking, Some(Tracking::Tag("v1.0".into())));
+        assert!(!f.folder().join("c.txt").exists());
+    }
+
+    #[test]
+    fn remote_reports_no_tracking_entry_informationally() {
+        let f = Fixture::embedded("main", None, &[("a.txt", "alpha")]);
+        let mut entry = EmbdEntry::load(&paths::embed_file_path(&f.folder())).unwrap();
+        entry.metadata.remote = "not-a-url".into();
+        entry.save(&paths::embed_file_path(&f.folder())).unwrap();
+
+        let outcome =
+            process_entry(&f.root, Path::new("myembed"), entry, &args(None, true)).unwrap();
+        assert!(matches!(outcome, Outcome::NoTracking));
+    }
+
+    #[test]
+    fn remote_reports_gone_branch_as_error() {
+        let f = Fixture::embedded(
+            "main",
+            Some(Tracking::Branch("no-such-branch".into())),
+            &[("a.txt", "alpha")],
+        );
+
+        let entry = EmbdEntry::load(&paths::embed_file_path(&f.folder())).unwrap();
+        let err =
+            process_entry(&f.root, Path::new("myembed"), entry, &args(None, true)).unwrap_err();
+        assert!(err.to_string().contains("gone upstream"), "{err}");
+    }
+
+    #[test]
+    fn remote_fast_path_when_pin_matches_branch_tip() {
+        let f = Fixture::embedded(
+            "main",
+            Some(Tracking::Branch("main".into())),
+            &[("a.txt", "alpha")],
+        );
+
+        let entry = EmbdEntry::load(&paths::embed_file_path(&f.folder())).unwrap();
+        let outcome =
+            process_entry(&f.root, Path::new("myembed"), entry, &args(None, true)).unwrap();
+        assert!(matches!(outcome, Outcome::UpToDate));
+    }
+
+    #[test]
+    fn rev_bump_records_branch_tracking() {
+        let f = Fixture::embedded("main", None, &[("a.txt", "alpha")]);
+        let feature_tip = git_stdout(&f.repo, &["rev-parse", "feature^{commit}"]);
+
+        let entry = EmbdEntry::load(&paths::embed_file_path(&f.folder())).unwrap();
+        let outcome = process_entry(
+            &f.root,
+            Path::new("myembed"),
+            entry,
+            &args(Some("feature"), false),
+        )
+        .unwrap();
+        match outcome {
+            Outcome::Updated { new_commit, .. } => assert_eq!(new_commit, feature_tip),
+            other => panic!("expected Updated, got {other:?}"),
+        }
+        assert_eq!(
+            fs::read_to_string(f.folder().join("b.txt")).unwrap(),
+            "beta"
+        );
+        let saved = EmbdEntry::load(&paths::embed_file_path(&f.folder())).unwrap();
+        assert_eq!(saved.metadata.commit_hash, feature_tip);
+        assert_eq!(
+            saved.metadata.tracking,
+            Some(Tracking::Branch("feature".into()))
+        );
     }
 }
