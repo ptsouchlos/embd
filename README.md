@@ -59,6 +59,14 @@ embd update infra --rev abcd1234
 
 This will update the files on disk and update the commit hash and file manifest tracked for that project in its `.embd` file. Updates can also be forced using `--force` and untracked files can be removed using `--overwrite`. See `embd update -h` for more details.
 
+To advance embeds that track a branch to the branch's latest commit, use the `--remote` flag:
+
+```bash
+embd update infra --remote
+```
+
+`embd add` records where each pin came from (a branch or tag) in the embed's `.embd` file. `--remote` moves branch-tracking embeds to the branch's current tip; tag-pinned and raw-hash embeds are left alone and reported.
+
 ### Check Status of Embeds
 
 To check for deviations, run:
