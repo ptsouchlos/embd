@@ -160,11 +160,20 @@ pub(crate) mod cli {
             );
         }
         let stdout = String::from_utf8_lossy(&out.stdout);
-        let first = stdout.lines().next().unwrap_or_default();
-        match first.split_whitespace().next() {
-            Some(sha) => Ok(Some(sha.to_string())),
-            None => Ok(None),
+        // ls-remote patterns match by suffix, so the pattern can also match a
+        // longer ref (e.g. `refs/heads/main` against `refs/heads/x/refs/heads/main`).
+        // Only accept the exact ref we asked for.
+        for line in stdout.lines() {
+            let mut fields = line.split_whitespace();
+            let (sha, ref_name) = match (fields.next(), fields.next()) {
+                (Some(sha), Some(ref_name)) => (sha, ref_name),
+                _ => continue,
+            };
+            if ref_name == spec.as_str() {
+                return Ok(Some(sha.to_string()));
+            }
         }
+        Ok(None)
     }
 
     /// Checkout the given tag in the given repository directory.
@@ -513,6 +522,16 @@ mod tests {
             cli::ls_remote_head(&remote, "main").unwrap(),
             Some(cli::commit_hash_of(repo.as_path()).unwrap())
         );
+    }
+
+    #[test]
+    fn ls_remote_head_ignores_suffix_matching_refs() {
+        let (_repo_dir, repo) = test_repo();
+        // The suffix pattern for `refs/heads/alt` also matches this longer
+        // ref, which must not be treated as the branch itself.
+        git(&repo, &["branch", "x/refs/heads/alt"]);
+        let remote = repo.to_string_lossy().to_string();
+        assert!(cli::ls_remote_head(&remote, "alt").unwrap().is_none());
     }
 
     #[test]
