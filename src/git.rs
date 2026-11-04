@@ -228,7 +228,10 @@ pub(crate) mod cli {
     /// "not this kind", not an error; only a failure to run git is an `Err`.
     pub(crate) fn classify_head(repo_path: &Path, rev: Option<&str>) -> Result<Option<Tracking>> {
         // Attached HEAD: a default-branch clone, or `checkout <branch>` in a
-        // fresh clone (which creates a local tracking branch).
+        // fresh clone (which creates a local tracking branch). Checked before
+        // the tag probes on purpose: if the rev names both a branch and a
+        // tag, `git checkout` resolves to the branch, so we record the
+        // branch-tracking too.
         if let Some(branch) = run_ok(repo_path, &["symbolic-ref", "-q", "--short", "HEAD"])? {
             return Ok(Some(Tracking::Branch(branch)));
         }
