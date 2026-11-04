@@ -228,6 +228,7 @@ mod tests {
             metadata: Metadata {
                 remote: "https://example.git".into(),
                 commit_hash: commit.into(),
+                tracking: None,
                 allow_untracked: false,
                 include: Vec::new(),
                 exclude: Vec::new(),

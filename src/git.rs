@@ -99,6 +99,8 @@ pub(crate) mod cli {
 
     use anyhow::{Context, Result, bail};
 
+    use crate::config::Tracking;
+
     /// Clone a repository at the given link to the given destination folder.
     ///
     /// # Arguments
@@ -106,15 +108,25 @@ pub(crate) mod cli {
     /// - `link`: The repository to clone, must be a valid URL (HTTPS or SSH)
     /// - `dest`: Where to clone the repo to. Must be a valid path.
     /// - `shallow`: If true, will pass `--depth 1` to `git clone` to avoid cloning all of the git history.
+    /// - `branch`: If set, pass `--branch <branch>` to `git clone` so the clone
+    ///   checks out that branch instead of the remote's default branch.
     ///
     /// # Returns
     ///
     /// Error if there was a failure, () otherwise.
-    pub(crate) fn clone(link: &str, dest: &Path, shallow: bool) -> Result<()> {
+    pub(crate) fn clone(
+        link: &str,
+        dest: &Path,
+        shallow: bool,
+        branch: Option<&str>,
+    ) -> Result<()> {
         let mut cmd = std::process::Command::new("git");
         cmd.args(["clone", link, &dest.to_string_lossy()]);
         if shallow {
             cmd.args(["--depth", "1"]);
+        }
+        if let Some(branch) = branch {
+            cmd.args(["--branch", branch]);
         }
 
         let out = cmd.output().context("failed to run git clone")?;
@@ -125,6 +137,43 @@ pub(crate) mod cli {
             );
         }
         Ok(())
+    }
+
+    /// Query the remote for the latest commit of a branch without cloning.
+    ///
+    /// # Returns
+    ///
+    /// - `Ok(Some(sha))`: the remote branch tip.
+    /// - `Ok(None)`: the branch does not exist on the remote (or the remote
+    ///   has no branches at all).
+    /// - `Err`: a failure to run git or reach the remote.
+    pub(crate) fn ls_remote_head(remote: &str, branch: &str) -> Result<Option<String>> {
+        let spec = format!("refs/heads/{branch}");
+        let out = std::process::Command::new("git")
+            .args(["ls-remote", remote, &spec])
+            .output()
+            .context("failed to run git ls-remote")?;
+        if !out.status.success() {
+            bail!(
+                "git ls-remote failed:\n{}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        }
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        // ls-remote patterns match by suffix, so the pattern can also match a
+        // longer ref (e.g. `refs/heads/main` against `refs/heads/x/refs/heads/main`).
+        // Only accept the exact ref we asked for.
+        for line in stdout.lines() {
+            let mut fields = line.split_whitespace();
+            let (sha, ref_name) = match (fields.next(), fields.next()) {
+                (Some(sha), Some(ref_name)) => (sha, ref_name),
+                _ => continue,
+            };
+            if ref_name == spec.as_str() {
+                return Ok(Some(sha.to_string()));
+            }
+        }
+        Ok(None)
     }
 
     /// Checkout the given tag in the given repository directory.
@@ -150,6 +199,63 @@ pub(crate) mod cli {
             );
         }
         Ok(())
+    }
+
+    /// Run a probe command in the repo and return its trimmed stdout.
+    ///
+    /// A non-zero exit means "not this kind" and yields `Ok(None)`; only a
+    /// failure to run git is an `Err`.
+    fn run_ok(repo_path: &Path, args: &[&str]) -> Result<Option<String>> {
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(repo_path)
+            .args(args)
+            .output()
+            .context("failed to run git")?;
+        if !out.status.success() {
+            return Ok(None);
+        }
+        Ok(Some(
+            String::from_utf8_lossy(&out.stdout).trim().to_string(),
+        ))
+    }
+
+    /// Classify what the repo's HEAD resolved to after checkout, so `add` can
+    /// record where the pinned commit came from instead of parsing the user's
+    /// string.
+    ///
+    /// # Arguments
+    ///
+    /// - `repo_path`: Full path to the repo, already checked out.
+    /// - `rev`: The ref the caller checked out, if any. When several tags point
+    ///   at the same commit, this one is preferred.
+    ///
+    /// # Returns
+    ///
+    /// `Ok(Some(Branch(_)))` for an attached HEAD, `Ok(Some(Tag(_)))` for a
+    /// tag, `Ok(None)` for a raw commit. A non-zero exit from a probe means
+    /// "not this kind", not an error; only a failure to run git is an `Err`.
+    pub(crate) fn classify_head(repo_path: &Path, rev: Option<&str>) -> Result<Option<Tracking>> {
+        // Attached HEAD: a default-branch clone, or `checkout <branch>` in a
+        // fresh clone (which creates a local tracking branch). Checked before
+        // the tag probes on purpose: if the rev names both a branch and a
+        // tag, `git checkout` resolves to the branch, so we record the
+        // branch-tracking too.
+        if let Some(branch) = run_ok(repo_path, &["symbolic-ref", "-q", "--short", "HEAD"])? {
+            return Ok(Some(Tracking::Branch(branch)));
+        }
+        // Detached at the tag the caller named, if they named one.
+        if let Some(rev) = rev {
+            let ref_name = format!("refs/tags/{rev}");
+            if run_ok(repo_path, &["show-ref", "--verify", "--quiet", &ref_name])?.is_some() {
+                return Ok(Some(Tracking::Tag(rev.to_string())));
+            }
+        }
+        // Detached at some other exact tag on HEAD.
+        if let Some(tag) = run_ok(repo_path, &["describe", "--exact-match", "--tags", "HEAD"])? {
+            return Ok(Some(Tracking::Tag(tag)));
+        }
+        Ok(None)
     }
 
     /// Get the commit hash of the repo at the given path.
@@ -197,9 +303,77 @@ pub(crate) mod cli {
     }
 }
 
+/// Shared helpers for tests that need a real git repo. Shared with the
+/// `update` command's tests, hence `pub(crate)`.
+#[cfg(test)]
+pub(crate) mod test_support {
+    use std::path::{Path, PathBuf};
+
+    use tempfile::TempDir;
+
+    /// Run `git <args>` in `dir`, panicking on non-zero exit.
+    pub(crate) fn git(dir: &Path, args: &[&str]) {
+        git_stdout(dir, args);
+    }
+
+    /// Run `git <args>` in `dir`, panicking on non-zero exit, and return the
+    /// trimmed stdout.
+    pub(crate) fn git_stdout(dir: &Path, args: &[&str]) -> String {
+        let out = std::process::Command::new("git")
+            .current_dir(dir)
+            .args(args)
+            .output()
+            .unwrap_or_else(|e| panic!("failed to run git: {e}"));
+        assert!(
+            out.status.success(),
+            "git {args:?} failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    }
+
+    /// Build a throwaway "upstream" repo:
+    /// - `main`: one commit (`a.txt`), tagged `v1.0`
+    /// - `feature`: one more commit on top of it (`b.txt`)
+    ///
+    /// The repo is left checked out on `main`. The `TempDir` is returned so
+    /// the caller can keep it alive.
+    pub(crate) fn test_repo() -> (TempDir, PathBuf) {
+        let dir = TempDir::new().expect("failed to create tempdir");
+        let repo = dir.path().to_path_buf();
+        git(&repo, &["init", "-q", "-b", "main"]);
+        git(&repo, &["config", "user.name", "embd tests"]);
+        git(&repo, &["config", "user.email", "embd@example.com"]);
+        std::fs::write(repo.join("a.txt"), "alpha").expect("failed to write a.txt");
+        git(&repo, &["add", "a.txt"]);
+        git(&repo, &["commit", "-q", "-m", "commit 1"]);
+        git(&repo, &["tag", "v1.0"]);
+        git(&repo, &["checkout", "-q", "-b", "feature"]);
+        std::fs::write(repo.join("b.txt"), "beta").expect("failed to write b.txt");
+        git(&repo, &["add", "b.txt"]);
+        git(&repo, &["commit", "-q", "-m", "commit 2"]);
+        git(&repo, &["checkout", "-q", "main"]);
+        (dir, repo)
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use super::test_support::{git, git_stdout, test_repo};
     use super::*;
+    use std::path::{Path, PathBuf};
+    use tempfile::{TempDir, tempdir};
+
+    use crate::config::Tracking;
+
+    /// Clone the upstream repo locally (full history, like a `--rev` add
+    /// would) and keep both the tempdir and the clone path alive.
+    fn clone_of(repo: &Path) -> (TempDir, PathBuf) {
+        let dir = tempdir().unwrap();
+        let path = dir.path().to_path_buf();
+        cli::clone(&repo.to_string_lossy(), &path, false, None).unwrap();
+        (dir, path)
+    }
 
     #[test]
     fn parse_https_url() {
@@ -270,5 +444,109 @@ mod tests {
     fn accepts_name_with_dots_and_dashes_inside() {
         let (_, name) = parse_repo_link("https://github.com/org/foo.bar-baz.git").unwrap();
         assert_eq!(name, "foo.bar-baz");
+    }
+
+    #[test]
+    fn classify_default_clone_is_branch() {
+        let (_repo_dir, repo) = test_repo();
+        let (_clone_dir, clone) = clone_of(&repo);
+        assert_eq!(
+            cli::classify_head(&clone, None).unwrap(),
+            Some(Tracking::Branch("main".to_string()))
+        );
+    }
+
+    #[test]
+    fn classify_checked_out_branch() {
+        let (_repo_dir, repo) = test_repo();
+        let (_clone_dir, clone) = clone_of(&repo);
+        git(&clone, &["checkout", "-q", "feature"]);
+        assert_eq!(
+            cli::classify_head(&clone, Some("feature")).unwrap(),
+            Some(Tracking::Branch("feature".to_string()))
+        );
+    }
+
+    #[test]
+    fn classify_checked_out_tag() {
+        let (_repo_dir, repo) = test_repo();
+        let (_clone_dir, clone) = clone_of(&repo);
+        git(&clone, &["checkout", "-q", "v1.0"]);
+        assert_eq!(
+            cli::classify_head(&clone, Some("v1.0")).unwrap(),
+            Some(Tracking::Tag("v1.0".to_string()))
+        );
+    }
+
+    #[test]
+    fn classify_raw_commit_is_none() {
+        let (_repo_dir, repo) = test_repo();
+        let (_clone_dir, clone) = clone_of(&repo);
+        let sha = git_stdout(&repo, &["rev-parse", "feature"]);
+        git(&clone, &["checkout", "-q", sha.as_str()]);
+        assert_eq!(
+            cli::classify_head(&clone, Some(sha.as_str())).unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn classify_tag_not_named_by_rev() {
+        let (_repo_dir, repo) = test_repo();
+        git(&repo, &["tag", "alt"]);
+        let (_clone_dir, clone) = clone_of(&repo);
+        git(&clone, &["checkout", "-q", "alt"]);
+        assert_eq!(
+            cli::classify_head(&clone, Some("alt")).unwrap(),
+            Some(Tracking::Tag("alt".to_string()))
+        );
+    }
+
+    #[test]
+    fn clone_with_branch_checks_out_that_branch() {
+        let (_repo_dir, repo) = test_repo();
+        let dir = tempdir().unwrap();
+        let path = dir.path().to_path_buf();
+        cli::clone(&repo.to_string_lossy(), &path, false, Some("feature")).unwrap();
+        assert_eq!(
+            cli::classify_head(&path, None).unwrap(),
+            Some(Tracking::Branch("feature".to_string()))
+        );
+    }
+
+    #[test]
+    fn ls_remote_head_returns_branch_tip() {
+        let (_repo_dir, repo) = test_repo();
+        let remote = repo.to_string_lossy().to_string();
+        assert_eq!(
+            cli::ls_remote_head(&remote, "main").unwrap(),
+            Some(cli::commit_hash_of(repo.as_path()).unwrap())
+        );
+    }
+
+    #[test]
+    fn ls_remote_head_ignores_suffix_matching_refs() {
+        let (_repo_dir, repo) = test_repo();
+        // The suffix pattern for `refs/heads/alt` also matches this longer
+        // ref, which must not be treated as the branch itself.
+        git(&repo, &["branch", "x/refs/heads/alt"]);
+        let remote = repo.to_string_lossy().to_string();
+        assert!(cli::ls_remote_head(&remote, "alt").unwrap().is_none());
+    }
+
+    #[test]
+    fn ls_remote_head_missing_branch_is_none() {
+        let (_repo_dir, repo) = test_repo();
+        let remote = repo.to_string_lossy().to_string();
+        assert!(
+            cli::ls_remote_head(&remote, "no-such-branch")
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn ls_remote_head_bogus_remote_is_err() {
+        assert!(cli::ls_remote_head("not-a-remote-url", "main").is_err());
     }
 }
