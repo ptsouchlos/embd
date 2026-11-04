@@ -208,9 +208,13 @@ fn process_entry(
         }
     };
 
-    // If a bump resolved back to the existing pin with a clean tree, no-op.
+    // If a bump resolved back to the existing pin with a clean tree and the
+    // tracking is unchanged, no-op. Tracking may legitimately change on its
+    // own (re-pinning a raw-hash entry to a branch that already holds it).
+    let tracking_changed = tracking != entry.metadata.tracking;
     if moves_pin
         && new_commit == entry.metadata.commit_hash
+        && !tracking_changed
         && report.state == EntryState::Compared
         && report.changes.is_empty()
     {
@@ -226,10 +230,10 @@ fn process_entry(
 
     let old_commit = entry.metadata.commit_hash.clone();
 
-    // Save config first when the pin moves, before the file manifest catches
-    // up. Durable pin is the source of truth; a crash after this point is
-    // recoverable via `update --force`.
-    if moves_pin && new_commit != entry.metadata.commit_hash {
+    // Save config first when the pin or the tracking moves, before the file
+    // manifest catches up. Durable pin is the source of truth; a crash after
+    // this point is recoverable via `update --force`.
+    if moves_pin && (new_commit != entry.metadata.commit_hash || tracking_changed) {
         entry.metadata.commit_hash = new_commit.clone();
         entry.metadata.tracking = tracking;
         entry.save(&config_path)?;
@@ -841,6 +845,44 @@ mod tests {
         assert_eq!(
             saved.metadata.tracking,
             Some(Tracking::Branch("feature".into()))
+        );
+    }
+
+    #[test]
+    fn rev_at_current_pin_records_tracking() {
+        // Migration path for pre-PR entries: a raw-hash pin that already
+        // sits at the branch tip. The pin does not move, but the re-pin
+        // must still record the tracking.
+        let f = Fixture::embedded("main", None, &[("a.txt", "alpha")]);
+        let tip = git_stdout(&f.repo, &["rev-parse", "main^{commit}"]);
+
+        let entry = EmbdEntry::load(&paths::embed_file_path(&f.folder())).unwrap();
+        let outcome = process_entry(
+            &f.root,
+            Path::new("myembed"),
+            entry,
+            &args(Some("main"), false),
+        )
+        .unwrap();
+        match outcome {
+            Outcome::Updated {
+                new_commit,
+                changes,
+                ..
+            } => {
+                assert_eq!(new_commit, tip);
+                assert!(
+                    changes.is_empty(),
+                    "expected no file churn, got {changes:?}"
+                );
+            }
+            other => panic!("expected Updated, got {other:?}"),
+        }
+        let saved = EmbdEntry::load(&paths::embed_file_path(&f.folder())).unwrap();
+        assert_eq!(saved.metadata.commit_hash, tip);
+        assert_eq!(
+            saved.metadata.tracking,
+            Some(Tracking::Branch("main".into()))
         );
     }
 }
