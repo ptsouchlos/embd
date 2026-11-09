@@ -40,49 +40,25 @@ jobs:
         include:
           - target: x86_64-unknown-linux-musl
             runner: ubuntu-22.04
-            archive: tar.gz
-            musl: true
           - target: aarch64-unknown-linux-musl
             runner: ubuntu-22.04-arm
-            archive: tar.gz
-            musl: true
           - target: aarch64-apple-darwin
             runner: macos-26
-            archive: tar.gz
           - target: x86_64-pc-windows-msvc
             runner: windows-2025
-            archive: zip
     steps:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0 # full history + tags so shadow-rs builds correct version metadata
-      - name: Set up Rust
-        run: |
-          rustup default stable
-          rustup target add ${{ matrix.target }}
-      - name: Install musl tools
-        if: matrix.musl
-        run: sudo apt-get update && sudo apt-get install -y musl-tools
-      - name: Build
-        run: cargo build --release --target ${{ matrix.target }}
-      - name: Package (tar.gz)
-        if: matrix.archive == 'tar.gz'
-        shell: bash
-        run: tar -C target/${{ matrix.target }}/release -czf embd-${{ matrix.target }}.tar.gz embd
-      - name: Package (zip)
-        if: matrix.archive == 'zip'
-        shell: bash
-        run: |
-          cd target/${{ matrix.target }}/release
-          7z a "${GITHUB_WORKSPACE}/embd-${{ matrix.target }}.zip" embd.exe
-      - name: Checksum
-        shell: bash
-        run: sha256sum "embd-${{ matrix.target }}.${{ matrix.archive }}" > "embd-${{ matrix.target }}.${{ matrix.archive }}.sha256"
-      - name: Upload to release
-        uses: softprops/action-gh-release@v3
+      - uses: ptsouchlos/infra/.github/actions/setup-rust@v1
         with:
-          files: embd-${{ matrix.target }}.*
-          prerelease: ${{ contains(github.ref_name, '-') }}
+          components: ""
+          targets: ${{ matrix.target }}
+      - uses: ptsouchlos/infra/.github/actions/cargo-release@v1
+        with:
+          target: ${{ matrix.target }}
+          bin: embd
+          release: "true"
 
   publish-crate:
     name: Publish to crates.io
