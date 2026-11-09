@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 
 use crate::color;
 use crate::commands::common::select_entries;
-use crate::config::{self, EntryReport, EntryState, FileChange};
+use crate::config::{self, EntryReport, EntryState, FileChange, Tracking};
 use crate::paths;
 
 #[derive(clap::Args, Debug)]
@@ -50,7 +50,13 @@ pub(crate) fn print_report(report: &EntryReport, quiet: bool) {
     } else {
         color::warn("drift")
     };
-    println!("{header}: {summary}");
+
+    let tracking_suffix = match &report.tracking {
+        Some(Tracking::Branch(b)) => format!(" (tracking {b})"),
+        Some(Tracking::Tag(t)) => format!(" (tag {t})"),
+        None => String::new(),
+    };
+    println!("{header}{tracking_suffix}: {summary}");
 
     if quiet {
         return;

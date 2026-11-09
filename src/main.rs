@@ -23,7 +23,8 @@ enum Command {
     Status(StatusArgs),
     #[command(
         about,
-        long_about = "Apply pinned embeds to disk; optionally bump pins with --rev."
+        long_about = "Apply pinned embeds to disk; optionally bump pins with --rev or \
+        advance branch-tracking embeds with --remote."
     )]
     Update(UpdateArgs),
 }

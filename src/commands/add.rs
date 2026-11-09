@@ -4,7 +4,7 @@ use anyhow::{Context, Result, bail};
 use tempfile::tempdir;
 
 use crate::color;
-use crate::config::{EmbdEntry, FileLocks, Metadata};
+use crate::config::{EmbdEntry, FileLocks, Metadata, Tracking};
 use crate::filter::Filter;
 use crate::{filesystem, git, paths};
 
@@ -40,6 +40,13 @@ pub(crate) struct AddArgs {
     allow_untracked: bool,
     #[clap(short, long, help = "Commit hash, tag, or branch to pull")]
     rev: Option<String>,
+    #[clap(
+        long,
+        value_name = "BRANCH",
+        requires = "rev",
+        help = "Branch to track for later `update --remote` runs; the pinned commit must be the branch tip or an ancestor of it"
+    )]
+    branch: Option<String>,
     #[clap(
         short,
         long,
@@ -127,7 +134,14 @@ pub(crate) fn execute(args: AddArgs) -> Result<()> {
     }
 
     let commit_hash = git::cli::commit_hash_of(tmp_dir.path())?;
-    let tracking = git::cli::classify_head(tmp_dir.path(), args.rev.as_deref())?;
+    let tracking = if let Some(ref branch) = args.branch {
+        // Explicit tracking wins over classification: the pin may be a raw
+        // commit or tag that `classify_head` would not attach to a branch.
+        git::cli::assert_head_on_branch(tmp_dir.path(), branch)?;
+        Some(Tracking::Branch(branch.clone()))
+    } else {
+        git::cli::classify_head(tmp_dir.path(), args.rev.as_deref())?
+    };
 
     // Copy + register. Anything that fails after copy_dir triggers a rollback
     // so we never leave on-disk state without a matching config entry.
@@ -242,5 +256,17 @@ mod tests {
     fn positional_and_flag_conflict() {
         assert!(parse(&[URL, "-l", URL]).is_err());
         assert!(parse(&[URL, "vendor/bar", "-f", "vendor/bar"]).is_err());
+    }
+
+    #[test]
+    fn branch_requires_rev() {
+        assert!(parse(&[URL, "--branch", "main"]).is_err());
+    }
+
+    #[test]
+    fn branch_with_rev_parses() {
+        let args = parse(&[URL, "--rev", "abc123", "--branch", "main"]).unwrap();
+        assert_eq!(args.rev.as_deref(), Some("abc123"));
+        assert_eq!(args.branch.as_deref(), Some("main"));
     }
 }

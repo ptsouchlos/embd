@@ -7,7 +7,7 @@ use anyhow::{Context, Result, bail};
 
 use crate::{
     color,
-    config::{EmbdEntry, hash},
+    config::{EmbdEntry, Tracking, hash},
     filesystem,
 };
 
@@ -40,6 +40,7 @@ pub(crate) struct EntryReport {
     pub state: EntryState,
     pub changes: Vec<FileChange>,
     pub allow_untracked: bool,
+    pub tracking: Option<Tracking>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -80,6 +81,7 @@ pub(crate) fn inspect_entry(root: &Path, folder: &Path, entry: &EmbdEntry) -> En
         state: EntryState::Compared,
         changes: Vec::new(),
         allow_untracked: entry.metadata.allow_untracked,
+        tracking: entry.metadata.tracking.clone(),
     };
 
     if !folder_abs.exists() {

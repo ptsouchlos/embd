@@ -18,8 +18,8 @@ The general idea is to pull the dependent repository as source into the parent r
 
 | Command  |                   Description                   |                                                                                                                                                 Options                                                                                                                                                 |
 | :------: | :---------------------------------------------: | :-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------: |
-|  `add`   |     Add a new embedded repo to the project.     | `folder`: Specify what subdirectory to put embed in (defaults to the repository name). \n `allow-untracked`: Allow untracked files in the embed directory. \n `link`: The link to the project to include \n `rev`: Specify the commit,tag or branch to pull \n `include`: Glob patterns to include \n `exclude`: Glob patterns to exclude |
-| `update` | Update all embeds to match their pinned config. |                                          `rev`: Specify the commit, tag or branch to advance to \n `force`: Overwrite any local modification \n `overwrite`: Delete all untracked files (requries `force`) \n `quiet`: Print summaries, not each file updates.                                          |
+|  `add`   |     Add a new embedded repo to the project.     | `folder`: Specify what subdirectory to put embed in (defaults to the repository name). \n `allow-untracked`: Allow untracked files in the embed directory. \n `link`: The link to the project to include \n `rev`: Specify the commit,tag or branch to pull \n `branch`: Track a branch for later `update --remote` runs; the pinned commit must be the branch tip or an ancestor of it (requires `rev`) \n `include`: Glob patterns to include \n `exclude`: Glob patterns to exclude |
+| `update` | Update all embeds to match their pinned config. |                                          `rev`: Specify the commit, tag or branch to advance to \n `remote`: Advance branch-tracking embeds to the latest commit on their tracked branch \n `force`: Overwrite any local modification \n `overwrite`: Delete all untracked files (requires `force`) \n `quiet`: Print summaries, not each file updates.                                          |
 | `status` |         Show the status of all embeds.          |                                                                                                                           `quiet`: Should summaries per embed, not per file.                                                                                                                            |
 
 ### Configuration File
@@ -28,12 +28,19 @@ The general idea is to pull the dependent repository as source into the parent r
 
 Each file has a `metadata` table with the remote repository URL, commit, and include/exclude filters, plus a `files` table of sha256 hashes per tracked file, used to detect local drift without re-pulling or cloning files from the remote. The embed's folder isn't stored in the file — it's implied by the file's own location.
 
+`metadata` also carries an optional `tracking` field: where `commit_hash` was resolved from, written as a `[metadata.tracking]` table with either `branch` or `tag`. It is set by `add` (from what git actually checked out) and refreshed by `update --rev`. Its absence means the pin is a raw commit hash, or the entry predates tracking. `update --remote` uses it to advance branch-tracking embeds to the branch's tip, and leaves tag-pinned and tracking-less embeds alone (reported, not failures).
+
 ```toml
 # example/.embd
 [metadata]
 remote = "https://example.git"
 commit_hash = "123abcd1234"
 allow_untracked = false
+
+# optional: what commit_hash was resolved from; exactly one of branch/tag
+[metadata.tracking]
+branch = "main"
+# tag = "v1.0"
 
 [files]
 "a.txt" = "sha256:..."

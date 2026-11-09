@@ -281,6 +281,45 @@ pub(crate) mod cli {
         Ok(String::from_utf8(out.stdout)?.trim().to_string())
     }
 
+    /// Check that the repo's current HEAD is the tip of the remote's
+    /// `branch` or an ancestor of it, so a later `update --remote` can
+    /// fast-forward the pin.
+    ///
+    /// # Arguments
+    ///
+    /// - `repo_path`: Full path to the clone, already checked out.
+    /// - `branch`: Remote branch name, without the `origin/` prefix.
+    ///
+    /// # Returns
+    ///
+    /// `Err` if the branch has no remote-tracking ref in the clone, if HEAD
+    /// is not reachable from it, or if a git call fails; `Ok(())` otherwise.
+    pub(crate) fn assert_head_on_branch(repo_path: &Path, branch: &str) -> Result<()> {
+        let ref_name = format!("refs/remotes/origin/{branch}");
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(repo_path)
+            .args(["show-ref", "--verify", "--quiet", &ref_name])
+            .output()
+            .context("failed to run git")?;
+        if !out.status.success() {
+            bail!("branch '{branch}' does not exist on the remote");
+        }
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(repo_path)
+            .args(["merge-base", "--is-ancestor", "HEAD", &ref_name])
+            .output()
+            .context("failed to run git merge-base")?;
+        if !out.status.success() {
+            bail!(
+                "pinned commit is not reachable from origin/{branch}; \
+                 the pin must be the branch tip or an ancestor of it"
+            );
+        }
+        Ok(())
+    }
+
     /// Find the root of a git repo.
     ///
     /// # Arguments
@@ -548,5 +587,24 @@ mod tests {
     #[test]
     fn ls_remote_head_bogus_remote_is_err() {
         assert!(cli::ls_remote_head("not-a-remote-url", "main").is_err());
+    }
+
+    #[test]
+    fn assert_head_on_branch_rejects_unreachable_pin() {
+        let (_repo_dir, repo) = test_repo();
+        let (_clone_dir, clone) = clone_of(&repo);
+        // A fresh clone is attached to the remote's default branch, whose tip
+        // trivially sits on main.
+        cli::assert_head_on_branch(&clone, "main").unwrap();
+        // The feature tip is not reachable from main.
+        let feature_sha = git_stdout(&repo, &["rev-parse", "feature"]);
+        cli::checkout(&clone, feature_sha).unwrap();
+        let err = cli::assert_head_on_branch(&clone, "main").unwrap_err();
+        assert!(err.to_string().contains("not reachable from origin/main"));
+        // but it is the feature tip.
+        cli::assert_head_on_branch(&clone, "feature").unwrap();
+        // A branch that does not exist on the remote.
+        let err = cli::assert_head_on_branch(&clone, "nope").unwrap_err();
+        assert!(err.to_string().contains("does not exist on the remote"));
     }
 }
