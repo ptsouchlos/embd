@@ -121,12 +121,13 @@ pub(crate) fn execute(args: AddArgs) -> Result<()> {
 
     let tmp_dir = tempdir().context("failed to create temporary directory")?;
     let shallow = args.rev.is_none();
-    git::cli::clone(&link, tmp_dir.path(), shallow)?;
+    git::cli::clone(&link, tmp_dir.path(), shallow, None)?;
     if let Some(ref rev) = args.rev {
         git::cli::checkout(tmp_dir.path(), rev.clone())?;
     }
 
     let commit_hash = git::cli::commit_hash_of(tmp_dir.path())?;
+    let tracking = git::cli::classify_head(tmp_dir.path(), args.rev.as_deref())?;
 
     // Copy + register. Anything that fails after copy_dir triggers a rollback
     // so we never leave on-disk state without a matching config entry.
@@ -143,6 +144,7 @@ pub(crate) fn execute(args: AddArgs) -> Result<()> {
             metadata: Metadata {
                 remote: link,
                 commit_hash,
+                tracking,
                 allow_untracked: args.allow_untracked,
                 include,
                 exclude,

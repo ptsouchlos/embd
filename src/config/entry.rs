@@ -69,6 +69,7 @@ mod tests {
             metadata: Metadata {
                 remote: remote.to_string(),
                 commit_hash: commit_hash.to_string(),
+                tracking: None,
                 allow_untracked: false,
                 include: Vec::new(),
                 exclude: Vec::new(),
