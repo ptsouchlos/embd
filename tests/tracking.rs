@@ -67,6 +67,10 @@ impl Env {
         git(&upstream, &["checkout", "-q", "main"]);
 
         git(&host, &["init", "-q", "-b", "main"]);
+        // Run embd from the path git reports for the repo. On Windows the temp
+        // dir can be an 8.3 short path (`RUNNER~1`) while git reports the long
+        // form, and embd compares the working directory to git's root.
+        let host = PathBuf::from(git(&host, &["rev-parse", "--show-toplevel"]));
 
         Env {
             _tmp: tmp,
