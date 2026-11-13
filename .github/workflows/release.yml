@@ -58,7 +58,40 @@ jobs:
         with:
           target: ${{ matrix.target }}
           bin: embd
-          release: "true"
+      - name: Upload release artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.target }}
+          path: dist/*
+
+  release:
+    name: Create GitHub release
+    needs: build
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: Download release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          path: release-assets
+          merge-multiple: true
+      - name: Create or update GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          IS_PRERELEASE: ${{ contains(github.ref_name, '-') }}
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            gh release upload "$TAG" release-assets/* --clobber
+          else
+            args=(--generate-notes --verify-tag)
+            if [ "$IS_PRERELEASE" = "true" ]; then
+              args+=(--prerelease)
+            fi
+            gh release create "$TAG" release-assets/* "${args[@]}"
+          fi
 
   build-wheels:
     name: Build wheel (${{ matrix.target }}${{ matrix.manylinux && format(' {0}', matrix.manylinux) || '' }})
