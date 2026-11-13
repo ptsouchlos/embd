@@ -17,7 +17,7 @@ jobs:
     name: Verify tag matches Cargo.toml
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
       - name: Compare tag and crate version
         shell: bash
         run: |
@@ -47,19 +47,19 @@ jobs:
           - target: x86_64-pc-windows-msvc
             runner: windows-2025
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
         with:
           fetch-depth: 0 # full history + tags so shadow-rs builds correct version metadata
-      - uses: ptsouchlos/infra/.github/actions/setup-rust@v1
+      - uses: ptsouchlos/infra/.github/actions/setup-rust@v1.8.0
         with:
           components: ""
           targets: ${{ matrix.target }}
-      - uses: ptsouchlos/infra/.github/actions/cargo-release@v1
+      - uses: ptsouchlos/infra/.github/actions/cargo-release@v1.8.0
         with:
           target: ${{ matrix.target }}
           bin: embd
       - name: Upload release artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v4.6.2
         with:
           name: release-${{ matrix.target }}
           path: dist/*
@@ -69,9 +69,9 @@ jobs:
     needs: build
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
       - name: Download release artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v4.3.0
         with:
           pattern: release-*
           path: release-assets
@@ -120,18 +120,18 @@ jobs:
             runner: windows-2025
             manylinux: ""
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
         with:
           fetch-depth: 0 # full history + tags so shadow-rs builds correct version metadata
       - name: Build wheel
-        uses: PyO3/maturin-action@v1
+        uses: PyO3/maturin-action@v1.51.0
         with:
           command: build
           args: --release --out dist
           target: ${{ matrix.target }}
           manylinux: ${{ matrix.manylinux }}
       - name: Upload wheel artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v4.6.2
         with:
           name: wheels-${{ runner.os }}-${{ matrix.target }}-${{ matrix.manylinux || 'native' }}
           path: dist/*.whl
@@ -146,7 +146,7 @@ jobs:
       id-token: write
     steps:
       - name: Download wheel artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v4.3.0
         with:
           pattern: wheels-*
           path: dist
@@ -176,7 +176,7 @@ jobs:
     if: ${{ !contains(github.ref_name, '-') }} # skip prereleases
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
         with:
           fetch-depth: 0 # shadow-rs reads git metadata at build time
       - name: Set up Rust
@@ -192,7 +192,7 @@ jobs:
     if: ${{ !contains(github.ref_name, '-') }} # skip prereleases
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
       - name: Repoint major tag to this release
         shell: bash
         run: |
