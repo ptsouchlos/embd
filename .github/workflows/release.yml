@@ -84,6 +84,83 @@ jobs:
           files: embd-${{ matrix.target }}.*
           prerelease: ${{ contains(github.ref_name, '-') }}
 
+  build-wheels:
+    name: Build wheel (${{ matrix.target }}${{ matrix.manylinux && format(' {0}', matrix.manylinux) || '' }})
+    needs: check-version
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-22.04
+            manylinux: "2_28"
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-22.04-arm
+            manylinux: "2_28"
+          - target: x86_64-unknown-linux-musl
+            runner: ubuntu-22.04
+            manylinux: musllinux_1_2
+          - target: aarch64-unknown-linux-musl
+            runner: ubuntu-22.04-arm
+            manylinux: musllinux_1_2
+          - target: aarch64-apple-darwin
+            runner: macos-26
+            manylinux: ""
+          - target: x86_64-pc-windows-msvc
+            runner: windows-2025
+            manylinux: ""
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # full history + tags so shadow-rs builds correct version metadata
+      - name: Build wheel
+        uses: PyO3/maturin-action@v1
+        with:
+          command: build
+          args: --release --out dist
+          target: ${{ matrix.target }}
+          manylinux: ${{ matrix.manylinux }}
+      - name: Upload wheel artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheels-${{ runner.os }}-${{ matrix.target }}-${{ matrix.manylinux || 'native' }}
+          path: dist/*.whl
+
+  publish-pypi:
+    name: Publish to PyPI
+    needs: [check-version, build-wheels]
+    if: ${{ !contains(github.ref_name, '-') }} # skip prereleases
+    runs-on: ubuntu-22.04
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - name: Download wheel artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: wheels-*
+          path: dist
+          merge-multiple: true
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+
+  notify-pre-commit:
+    name: Notify embd-pre-commit
+    needs: publish-pypi
+    if: ${{ !contains(github.ref_name, '-') }} # skip prereleases
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Dispatch release to embd-pre-commit
+        env:
+          GH_TOKEN: ${{ secrets.PRE_COMMIT_DISPATCH_TOKEN }}
+          VERSION: ${{ github.ref_name }}
+        run: |
+          version="${VERSION#v}"
+          gh api repos/ptsouchlos/embd-pre-commit/dispatches \
+            -f event_type=embd-release \
+            -f "client_payload[version]=${version}"
+
   publish-crate:
     name: Publish to crates.io
     needs: check-version
