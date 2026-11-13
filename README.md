@@ -102,12 +102,12 @@ The `args` input overrides the command (default `status`), so you can scope the 
 
 ## Use as a pre-commit hook
 
-You can run `embd status` via [pre-commit](https://pre-commit.com/) or [`prek`](https://github.com/j178/prek) by adding this to your `.pre-commit-config.yaml`:
+You can run `embd status` via [pre-commit](https://pre-commit.com/) or [`prek`](https://github.com/j178/prek) using [embd-pre-commit](https://github.com/ptsouchlos/embd-pre-commit) (uses pre-built `embd-cli` Python wheels from PyPI, no Rust toolchain required):
 
 ```yaml
 repos:
-  - repo: https://github.com/ptsouchlos/embd
-    rev: v0.1.2 # pin to a released tag
+  - repo: https://github.com/ptsouchlos/embd-pre-commit
+    rev: v0.5.0 # pin to a released tag
     hooks:
       - id: embd-status
 ```
