@@ -199,3 +199,109 @@ jobs:
           major="${GITHUB_REF_NAME%%.*}" # v0.1.0 -> v0
           git tag -f "$major" # points at the checked-out tag commit (HEAD)
           git push -f origin "$major"
+
+  publish-homebrew:
+    name: Publish to Homebrew tap
+    needs: release
+    if: ${{ !contains(github.ref_name, '-') }} # skip prereleases
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Download release artifacts
+        uses: actions/download-artifact@v4.3.0
+        with:
+          pattern: release-*
+          path: release-assets
+          merge-multiple: true
+      - name: Checkout homebrew-tap
+        uses: actions/checkout@v7.0.1
+        with:
+          repository: ptsouchlos/homebrew-tap
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: homebrew-tap
+      - name: Update Formula/embd.rb
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          python3 - <<'PY'
+          import os
+          import pathlib
+          import textwrap
+
+          version = os.environ["VERSION"].lstrip("v")
+          assets = pathlib.Path("release-assets")
+
+          def read_sha(name: str) -> str:
+              return (assets / f"{name}.sha256").read_text().split()[0]
+
+          macos_arm_sha = read_sha("embd-aarch64-apple-darwin.tar.gz")
+          linux_arm_sha = read_sha("embd-aarch64-unknown-linux-musl.tar.gz")
+          linux_x64_sha = read_sha("embd-x86_64-unknown-linux-musl.tar.gz")
+
+          formula = textwrap.dedent(f"""\
+              class Embd < Formula
+                desc "CLI tool for embedding a git repo into another"
+                homepage "https://github.com/ptsouchlos/embd"
+                version "{version}"
+                license "MIT"
+
+                on_macos do
+                  on_arm do
+                    url "https://github.com/ptsouchlos/embd/releases/download/v#{{version}}/embd-aarch64-apple-darwin.tar.gz"
+                    sha256 "{macos_arm_sha}"
+                  end
+                end
+
+                on_linux do
+                  on_arm do
+                    url "https://github.com/ptsouchlos/embd/releases/download/v#{{version}}/embd-aarch64-unknown-linux-musl.tar.gz"
+                    sha256 "{linux_arm_sha}"
+                  end
+
+                  on_intel do
+                    url "https://github.com/ptsouchlos/embd/releases/download/v#{{version}}/embd-x86_64-unknown-linux-musl.tar.gz"
+                    sha256 "{linux_x64_sha}"
+                  end
+                end
+
+                def install
+                  bin.install "embd"
+                end
+
+                test do
+                  assert_match version.to_s, shell_output("#{{bin}}/embd --version")
+                end
+              end
+          """)
+
+          out = pathlib.Path("homebrew-tap/Formula/embd.rb")
+          out.parent.mkdir(parents=True, exist_ok=True)
+          out.write_text(formula)
+          PY
+      - name: Commit and push formula
+        working-directory: homebrew-tap
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Formula/embd.rb
+          if git diff --cached --quiet; then
+            echo "Formula/embd.rb is already up to date."
+            exit 0
+          fi
+          git commit -m "embd ${VERSION#v}"
+          git push
+
+  publish-winget:
+    name: Publish to Winget
+    needs: release
+    if: ${{ !contains(github.ref_name, '-') }} # skip prereleases
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Submit update to microsoft/winget-pkgs
+        uses: vedantmgoyal9/winget-releaser@v2
+        with:
+          identifier: ptsouchlos.embd
+          installers-regex: 'embd-x86_64-pc-windows-msvc\.zip$'
+          token: ${{ secrets.WINGET_TOKEN }}
