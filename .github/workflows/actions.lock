@@ -9,6 +9,7 @@ workflows:
     '.github/workflows/clippy.yml':
         - 'actions/checkout@v7.0.1'
         - 'extractions/setup-just@v4.0.0'
+    '.github/workflows/crap.yml': []
     '.github/workflows/embd.yml':
         - 'actions/checkout@v7.0.1'
         - 'ptsouchlos/embd@v0.5.0'
