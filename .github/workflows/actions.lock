@@ -25,7 +25,7 @@ workflows:
         - 'actions/checkout@v7.0.1'
         - 'actions/download-artifact@v4.3.0'
         - 'actions/upload-artifact@v4.6.2'
-        - 'ptsouchlos/infra@v1.8.0'
+        - 'ptsouchlos/infra@v1.10.0'
         - 'pyo3/maturin-action@v1.51.0'
         - 'pypa/gh-action-pypi-publish@release/v1'
         - 'vedantmgoyal9/winget-releaser@v2'
@@ -69,13 +69,6 @@ dependencies:
         commit: 'sha1-0551596312d4008a6dfbc4d3c38fa20eaef46d2d'
         owner_id: 64203070
         repo_id: 341105718
-    'extractions/setup-just@v4':
-        ref: 'v4'
-        commit: 'sha1-53165ef7e734c5c07cb06b3c8e7b647c5aa16db3'
-        owner_id: 64203070
-        repo_id: 258510356
-        uses:
-            - 'extractions/setup-crate@0551596312d4008a6dfbc4d3c38fa20eaef46d2d'
     'extractions/setup-just@v4.0.0':
         ref: 'v4.0.0'
         commit: 'sha1-53165ef7e734c5c07cb06b3c8e7b647c5aa16db3'
@@ -88,15 +81,15 @@ dependencies:
         commit: 'sha1-5c5c93db6608cf3b9a71e21df9a766f0348edc15'
         owner_id: 6591180
         repo_id: 1154141989
-    'ptsouchlos/infra@v1.8.0':
-        ref: 'v1.8.0'
-        commit: 'sha1-5d7323ded6e542c428b3a575085f99150df41bb8'
+    'ptsouchlos/infra@v1.10.0':
+        ref: 'v1.10.0'
+        commit: 'sha1-3a9101079fe67a0bfe77c220f3ffbe20c55a7d96'
         owner_id: 6591180
         repo_id: 1270714317
         uses:
-            - 'extractions/setup-just@v4'
-            - 'softprops/action-gh-release@v3'
-            - 'swatinem/rust-cache@v2'
+            - 'extractions/setup-just@v4.0.0'
+            - 'softprops/action-gh-release@v3.0.4'
+            - 'swatinem/rust-cache@v2.9.3'
     'pyo3/maturin-action@v1.51.0':
         ref: 'v1.51.0'
         commit: 'sha1-e83996d129638aa358a18fbd1dfb82f0b0fb5d3b'
@@ -109,13 +102,13 @@ dependencies:
         repo_id: 178055147
         uses:
             - 'actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405'
-    'softprops/action-gh-release@v3':
-        ref: 'v3'
+    'softprops/action-gh-release@v3.0.4':
+        ref: 'v3.0.4'
         commit: 'sha1-8a0cd651e5b2365bd640854a3fa5dfc70e4875f3'
         owner_id: 2242
         repo_id: 204253808
-    'swatinem/rust-cache@v2':
-        ref: 'v2'
+    'swatinem/rust-cache@v2.9.3':
+        ref: 'v2.9.3'
         commit: 'sha1-d1527c8f67ef9af357290475d4af4b0fab8f12e0'
         owner_id: 580492
         repo_id: 298565987
