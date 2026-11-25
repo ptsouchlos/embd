@@ -71,7 +71,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7.0.1
       - name: Download release artifacts
-        uses: actions/download-artifact@v4.3.0
+        uses: actions/download-artifact@v8.0.2
         with:
           pattern: release-*
           path: release-assets
@@ -146,7 +146,7 @@ jobs:
       id-token: write
     steps:
       - name: Download wheel artifacts
-        uses: actions/download-artifact@v4.3.0
+        uses: actions/download-artifact@v8.0.2
         with:
           pattern: wheels-*
           path: dist
@@ -207,7 +207,7 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - name: Download release artifacts
-        uses: actions/download-artifact@v4.3.0
+        uses: actions/download-artifact@v8.0.2
         with:
           pattern: release-*
           path: release-assets
