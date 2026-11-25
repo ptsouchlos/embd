@@ -59,7 +59,7 @@ jobs:
           target: ${{ matrix.target }}
           bin: embd
       - name: Upload release artifact
-        uses: actions/upload-artifact@v4.6.2
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: release-${{ matrix.target }}
           path: dist/*
@@ -131,7 +131,7 @@ jobs:
           target: ${{ matrix.target }}
           manylinux: ${{ matrix.manylinux }}
       - name: Upload wheel artifact
-        uses: actions/upload-artifact@v4.6.2
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: wheels-${{ runner.os }}-${{ matrix.target }}-${{ matrix.manylinux || 'native' }}
           path: dist/*.whl
